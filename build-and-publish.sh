@@ -9,8 +9,8 @@ then
   touch published/latest/git-rev-$GIT_REV
   
   cp ./graal/com.oracle.truffle.api/com.oracle.truffle.api.jar \
-     ./graal/com.oracle.truffle.api.codegen/com.oracle.truffle.api.codegen.jar \
-     ./graal/com.oracle.truffle.codegen.processor/com.oracle.truffle.codegen.processor.jar \
+     ./graal/com.oracle.truffle.api.dsl/com.oracle.truffle.api.dsl.jar \
+     ./graal/com.oracle.truffle.dsl.processor/com.oracle.truffle.dsl.processor.jar \
     published/$GIT_REV/
   
   cp published/$GIT_REV/* published/latest/

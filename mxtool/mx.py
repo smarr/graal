@@ -609,11 +609,8 @@ class Suite:
                 for line in f:
                     line = line.strip()
                     if len(line) != 0 and line[0] != '#':
-                        try:
-                            key, value = line.split('=', 1)
-                            os.environ[key.strip()] = expandvars_in_property(value.strip())
-                        except:
-                            abort("mx/env could not be parsed. Make sure that each line contains a line similar to 'key=value'.")
+                        key, value = line.split('=', 1)
+                        os.environ[key.strip()] = expandvars_in_property(value.strip())
 
     def _post_init(self, opts):
         mxDir = join(self.dir, 'mx')

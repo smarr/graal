@@ -38,6 +38,7 @@ import com.oracle.graal.debug.*;
 import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.hotspot.nodes.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
@@ -101,7 +102,10 @@ public class NewObjectSnippets implements Snippets {
             // This handles both negative array sizes and very large array sizes
             DeoptimizeNode.deopt(DeoptimizationAction.None, DeoptimizationReason.RuntimeConstraint);
         }
+        return allocateArrayImpl(hub, length, prototypeMarkWord, headerSize, log2ElementSize, fillContents);
+    }
 
+    private static Object allocateArrayImpl(Word hub, int length, Word prototypeMarkWord, int headerSize, int log2ElementSize, boolean fillContents) {
         Object result;
         int alignment = wordSize();
         int allocationSize = computeArrayAllocationSize(length, alignment, headerSize, log2ElementSize);
@@ -121,12 +125,16 @@ public class NewObjectSnippets implements Snippets {
         return unsafeArrayCast(verifyOop(result), length, StampFactory.forNodeIntrinsic(), anchorNode);
     }
 
+    public static final ForeignCallDescriptor DYNAMIC_NEW_ARRAY = new ForeignCallDescriptor("dynamic_new_array", Object.class, Class.class, int.class);
+
+    @NodeIntrinsic(ForeignCallNode.class)
+    public static native Object dynamicNewArrayStub(@ConstantNodeParameter ForeignCallDescriptor descriptor, Class<?> elementType, int length);
+
     @Snippet
     public static Object allocateArrayDynamic(Class<?> elementType, int length, @ConstantParameter boolean fillContents) {
         Word hub = loadWordFromObject(elementType, arrayKlassOffset());
-        if (hub.equal(Word.zero())) {
-            // the array class is not yet loaded
-            DeoptimizeNode.deopt(DeoptimizationAction.InvalidateRecompile, DeoptimizationReason.Unresolved);
+        if (hub.equal(Word.zero()) || !belowThan(length, MAX_ARRAY_FAST_PATH_ALLOCATION_LENGTH)) {
+            return dynamicNewArrayStub(DYNAMIC_NEW_ARRAY, elementType, length);
         }
 
         int layoutHelper = readLayoutHelper(hub);
@@ -147,7 +155,7 @@ public class NewObjectSnippets implements Snippets {
         int log2ElementSize = (layoutHelper >> layoutHelperLog2ElementSizeShift()) & layoutHelperLog2ElementSizeMask();
         Word prototypeMarkWord = hub.readWord(prototypeMarkWordOffset(), PROTOTYPE_MARK_WORD_LOCATION);
 
-        return allocateArray(hub, length, prototypeMarkWord, headerSize, log2ElementSize, fillContents);
+        return allocateArrayImpl(hub, length, prototypeMarkWord, headerSize, log2ElementSize, fillContents);
     }
 
     /**
@@ -251,7 +259,7 @@ public class NewObjectSnippets implements Snippets {
             args.addConst("size", size);
             args.add("hub", hub);
             args.add("prototypeMarkWord", type.prototypeMarkWord());
-            args.addConst("fillContents", newInstanceNode.fillContents());
+            args.addConst("fillContents", useG1GC() ? true : newInstanceNode.fillContents());
 
             SnippetTemplate template = template(args);
             Debug.log("Lowering allocateInstance in %s: node=%s, template=%s, arguments=%s", graph, newInstanceNode, template, args);
@@ -276,7 +284,7 @@ public class NewObjectSnippets implements Snippets {
             args.add("prototypeMarkWord", arrayType.prototypeMarkWord());
             args.addConst("headerSize", headerSize);
             args.addConst("log2ElementSize", log2ElementSize);
-            args.addConst("fillContents", newArrayNode.fillContents());
+            args.addConst("fillContents", useG1GC() ? true : newArrayNode.fillContents());
 
             SnippetTemplate template = template(args);
             Debug.log("Lowering allocateArray in %s: node=%s, template=%s, arguments=%s", graph, newArrayNode, template, args);
@@ -287,7 +295,7 @@ public class NewObjectSnippets implements Snippets {
             Arguments args = new Arguments(allocateArrayDynamic);
             args.add("elementType", newArrayNode.getElementType());
             args.add("length", newArrayNode.length());
-            args.addConst("fillContents", newArrayNode.fillContents());
+            args.addConst("fillContents", useG1GC() ? true : newArrayNode.fillContents());
 
             SnippetTemplate template = template(args);
             template.instantiate(runtime, newArrayNode, DEFAULT_REPLACER, args);

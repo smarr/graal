@@ -1251,7 +1251,7 @@ class CommandLineFlags {
   develop(bool, TraceClassInitialization, false,                            \
           "Trace class initialization")                                     \
                                                                             \
-  develop(bool, TraceExceptions, false,                                     \
+  product(bool, TraceExceptions, false,                                     \
           "Trace exceptions")                                               \
                                                                             \
   develop(bool, TraceICs, false,                                            \
@@ -2399,7 +2399,7 @@ class CommandLineFlags {
   product(intx, CICompilerCount, CI_COMPILER_COUNT,                         \
           "Number of compiler threads to run")                              \
                                                                             \
-  product(intx, CompilationPolicyChoice, NOT_GRAALVM(0) GRAALVM_ONLY(4),    \
+  product(intx, CompilationPolicyChoice, 0,                                 \
           "which compilation policy (0/1)")                                 \
                                                                             \
   develop(bool, UseStackBanging, true,                                      \

@@ -50,6 +50,7 @@ public final class HotSpotVMConfig extends CompilerObject {
     public boolean usePopCountInstruction;
     public boolean useAESIntrinsics;
     public boolean useG1GC;
+    public long gcTotalCollectionsAddress;
 
     // Compressed Oops related values.
     public boolean useCompressedOops;
@@ -408,6 +409,7 @@ public final class HotSpotVMConfig extends CompilerObject {
     public long newInstanceAddress;
     public long newArrayAddress;
     public long newMultiArrayAddress;
+    public long dynamicNewArrayAddress;
     public long registerFinalizerAddress;
     public long threadIsInterruptedAddress;
     public long vmMessageAddress;

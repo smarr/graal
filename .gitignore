@@ -3,6 +3,7 @@
 **/*.jar
 **/bin
 **/nbproject
+**/nbplatform
 **/.project
 **/.settings
 **/.externalToolBuilders
@@ -17,3 +18,4 @@ mx/env
 mx/eclipse-launches
 jdk1.*
 workingsets.xml
+published

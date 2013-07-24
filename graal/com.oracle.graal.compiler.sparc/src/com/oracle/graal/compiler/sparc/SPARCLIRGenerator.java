@@ -25,35 +25,27 @@ package com.oracle.graal.compiler.sparc;
 
 import static com.oracle.graal.api.code.ValueUtil.*;
 import static com.oracle.graal.lir.LIRValueUtil.*;
-import static com.oracle.graal.lir.sparc.SPARCBitManipulationOp.IntrinsicOpcode.*;
-import static com.oracle.graal.lir.sparc.SPARCMathIntrinsicOp.IntrinsicOpcode.*;
 import static com.oracle.graal.lir.sparc.SPARCArithmetic.*;
+import static com.oracle.graal.lir.sparc.SPARCBitManipulationOp.IntrinsicOpcode.*;
 import static com.oracle.graal.lir.sparc.SPARCCompare.*;
+import static com.oracle.graal.lir.sparc.SPARCMathIntrinsicOp.IntrinsicOpcode.*;
 
-import com.oracle.graal.api.code.CallingConvention;
-import com.oracle.graal.api.code.CodeCacheProvider;
-import com.oracle.graal.api.code.DeoptimizationAction;
-import com.oracle.graal.api.code.ForeignCallLinkage;
-import com.oracle.graal.api.code.StackSlot;
-import com.oracle.graal.api.code.TargetDescription;
+import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.asm.sparc.*;
-import com.oracle.graal.compiler.gen.LIRGenerator;
-import com.oracle.graal.compiler.target.LIRGenLowerable;
-import com.oracle.graal.graph.GraalInternalError;
+import com.oracle.graal.compiler.gen.*;
+import com.oracle.graal.compiler.target.*;
+import com.oracle.graal.graph.*;
 import com.oracle.graal.lir.*;
-import com.oracle.graal.lir.StandardOp.*;
-import com.oracle.graal.lir.sparc.SPARCAddressValue;
+import com.oracle.graal.lir.StandardOp.JumpOp;
+import com.oracle.graal.lir.sparc.*;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.BinaryRegConst;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.Op1Stack;
-import com.oracle.graal.lir.sparc.SPARCArithmetic.Op2Stack;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.Op2Reg;
+import com.oracle.graal.lir.sparc.SPARCArithmetic.Op2Stack;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.ShiftOp;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.Unary1Op;
 import com.oracle.graal.lir.sparc.SPARCArithmetic.Unary2Op;
-import com.oracle.graal.lir.sparc.SPARCBitManipulationOp;
-import com.oracle.graal.lir.sparc.SPARCBreakpointOp;
-import com.oracle.graal.lir.sparc.SPARCByteSwapOp;
 import com.oracle.graal.lir.sparc.SPARCCompare.CompareOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.BranchOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.CondMoveOp;
@@ -62,37 +54,26 @@ import com.oracle.graal.lir.sparc.SPARCControlFlow.ReturnOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.SequentialSwitchOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.SwitchRangesOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.TableSwitchOp;
-import com.oracle.graal.lir.sparc.SPARCMathIntrinsicOp;
-import com.oracle.graal.lir.sparc.SPARCMove.LoadOp;
 import com.oracle.graal.lir.sparc.SPARCMove.MembarOp;
 import com.oracle.graal.lir.sparc.SPARCMove.MoveFromRegOp;
 import com.oracle.graal.lir.sparc.SPARCMove.MoveToRegOp;
 import com.oracle.graal.lir.sparc.SPARCMove.NullCheckOp;
 import com.oracle.graal.lir.sparc.SPARCMove.StackLoadAddressOp;
-import com.oracle.graal.lir.sparc.SPARCMove.StoreOp;
-import com.oracle.graal.lir.sparc.SPARCTestOp;
-import com.oracle.graal.nodes.BreakpointNode;
-import com.oracle.graal.nodes.DeoptimizingNode;
-import com.oracle.graal.nodes.DirectCallTargetNode;
-import com.oracle.graal.nodes.IndirectCallTargetNode;
-import com.oracle.graal.nodes.InfopointNode;
-import com.oracle.graal.nodes.SafepointNode;
-import com.oracle.graal.nodes.StructuredGraph;
-import com.oracle.graal.nodes.ValueNode;
+import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.calc.ConvertNode.Op;
-import com.oracle.graal.nodes.java.CompareAndSwapNode;
+import com.oracle.graal.nodes.java.*;
 
 /**
  * This class implements the SPARC specific portion of the LIR generator.
  */
-public class SPARCLIRGenerator extends LIRGenerator {
+public abstract class SPARCLIRGenerator extends LIRGenerator {
 
-    public static class SPARCSpillMoveFactory implements LIR.SpillMoveFactory {
+    private class SPARCSpillMoveFactory implements LIR.SpillMoveFactory {
 
         @Override
         public LIRInstruction createMove(AllocatableValue result, Value input) {
-            throw new InternalError("NYI");
+            return SPARCLIRGenerator.this.createMove(result, input);
         }
     }
 
@@ -111,26 +92,133 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
+    public boolean canStoreConstant(Constant c) {
+        // SPARC can only store integer null constants (via g0)
+        switch (c.getKind()) {
+            case Float:
+            case Double:
+                return false;
+            default:
+                return c.isNull();
+        }
+    }
+
+    @Override
+    public boolean canInlineConstant(Constant c) {
+        switch (c.getKind()) {
+            case Int:
+                return SPARCAssembler.isSimm13(c.asInt()) && !runtime.needsDataPatch(c);
+            case Long:
+                return SPARCAssembler.isSimm13(c.asLong()) && !runtime.needsDataPatch(c);
+            case Object:
+                return c.isNull();
+            default:
+                return true;
+        }
+    }
+
+    @Override
     public Variable emitMove(Value input) {
         Variable result = newVariable(input.getKind());
         emitMove(result, input);
         return result;
     }
 
+    protected SPARCLIRInstruction createMove(AllocatableValue dst, Value src) {
+        if (src instanceof SPARCAddressValue) {
+            // return new LeaOp(dst, (AMD64AddressValue) src);
+            throw new InternalError("NYI");
+        } else if (isRegister(src) || isStackSlot(dst)) {
+            return new MoveFromRegOp(dst, src);
+        } else {
+            return new MoveToRegOp(dst, src);
+        }
+    }
+
     @Override
     public void emitMove(AllocatableValue dst, Value src) {
-        // XXX SPARCAddress loads
-        /*
-         * if (src instanceof SPARCAddressValue) { public LoadOp(Kind kind, AllocatableValue result,
-         * SPARCAddressValue address, LIRFrameState state) {
-         * 
-         * return new LoadOp(result.getKind(), result, (SPARCAddressValue) src); }
-         */
-        if (isRegister(src) || isStackSlot(dst)) {
-            append(new MoveFromRegOp(dst, src));
+        append(createMove(dst, src));
+    }
+
+    @Override
+    public SPARCAddressValue emitAddress(Value base, long displacement, Value index, int scale) {
+        AllocatableValue baseRegister;
+        long finalDisp = displacement;
+        if (isConstant(base)) {
+            if (asConstant(base).isNull()) {
+                baseRegister = Value.ILLEGAL;
+            } else if (asConstant(base).getKind() != Kind.Object) {
+                finalDisp += asConstant(base).asLong();
+                baseRegister = Value.ILLEGAL;
+            } else {
+                baseRegister = load(base);
+            }
         } else {
-            append(new MoveToRegOp(dst, src));
+            baseRegister = asAllocatable(base);
         }
+
+        AllocatableValue indexRegister;
+        if (!index.equals(Value.ILLEGAL) && scale != 0) {
+            if (isConstant(index)) {
+                finalDisp += asConstant(index).asLong() * scale;
+                indexRegister = Value.ILLEGAL;
+            } else {
+                if (scale != 1) {
+                    Variable longIndex = newVariable(Kind.Long);
+                    emitMove(longIndex, index);
+                    indexRegister = emitMul(longIndex, Constant.forLong(scale));
+                } else {
+                    indexRegister = asAllocatable(index);
+                }
+
+                // if (baseRegister.equals(Value.ILLEGAL)) {
+                // baseRegister = asAllocatable(indexRegister);
+                // } else {
+                // Variable newBase = newVariable(Kind.Long);
+                // emitMove(newBase, baseRegister);
+                // baseRegister = newBase;
+                // baseRegister = emitAdd(baseRegister, indexRegister);
+                // }
+            }
+        } else {
+            indexRegister = Value.ILLEGAL;
+        }
+
+        int displacementInt;
+
+        // If we don't have an index register we can use a displacement, otherwise load the
+        // displacement into a register and add it to the base.
+        if (indexRegister.equals(Value.ILLEGAL)) {
+            // TODO What if displacement if too big?
+            displacementInt = (int) finalDisp;
+        } else {
+            displacementInt = 0;
+            AllocatableValue displacementRegister = load(Constant.forLong(finalDisp));
+            if (baseRegister.equals(Value.ILLEGAL)) {
+                baseRegister = displacementRegister;
+            } else {
+                Variable longBase = newVariable(Kind.Long);
+                emitMove(longBase, baseRegister);
+                baseRegister = emitAdd(longBase, displacementRegister);
+            }
+        }
+
+        return new SPARCAddressValue(target().wordKind, baseRegister, indexRegister, displacementInt);
+    }
+
+    protected SPARCAddressValue asAddressValue(Value address) {
+        if (address instanceof SPARCAddressValue) {
+            return (SPARCAddressValue) address;
+        } else {
+            return emitAddress(address, 0, Value.ILLEGAL, 0);
+        }
+    }
+
+    @Override
+    public Value emitAddress(StackSlot address) {
+        Variable result = newVariable(target().wordKind);
+        append(new StackLoadAddressOp(result, address));
+        return result;
     }
 
     @Override
@@ -151,39 +239,22 @@ public class SPARCLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitCompareBranch(Value left, Value right, Condition cond, boolean unorderedIsTrue, LabelRef label) {
-        Variable x;
-        Value y;
-        Condition condition;
-        if (LIRValueUtil.isVariable(right)) {
-            x = load(right);
-            y = loadNonConst(left);
-            condition = cond.mirror();
-        } else {
-            x = load(left);
-            y = loadNonConst(right);
-            condition = cond;
-        }
+        boolean mirrored = emitCompare(left, right);
+        Condition finalCondition = mirrored ? cond.mirror() : cond;
         switch (left.getKind().getStackKind()) {
             case Int:
-                append(new CompareOp(ICMP, x, y));
-                append(new BranchOp(condition, label));
-                break;
             case Long:
-                append(new CompareOp(LCMP, x, y));
-                append(new BranchOp(condition, label));
-                break;
-            case Float:
-                append(new CompareOp(FCMP, x, y));
-                append(new BranchOp(condition, label));
-                break;
-            case Double:
-                append(new CompareOp(DCMP, x, y));
-                append(new BranchOp(condition, label));
-                break;
             case Object:
-                append(new CompareOp(ACMP, x, y));
-                append(new BranchOp(condition, label));
+                append(new BranchOp(finalCondition, label));
                 break;
+// case Float:
+// append(new CompareOp(FCMP, x, y));
+// append(new BranchOp(condition, label));
+// break;
+// case Double:
+// append(new CompareOp(DCMP, x, y));
+// append(new BranchOp(condition, label));
+// break;
             default:
                 throw GraalInternalError.shouldNotReachHere("" + left.getKind());
         }
@@ -300,18 +371,13 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    protected void emitDirectCall(DirectCallTargetNode callTarget, Value result, Value[] parameters, Value[] temps, LIRFrameState callState) {
-        throw new InternalError("NYI");
-    }
-
-    @Override
-    protected void emitIndirectCall(IndirectCallTargetNode callTarget, Value result, Value[] parameters, Value[] temps, LIRFrameState callState) {
-        throw new InternalError("NYI");
-    }
-
-    @Override
     protected void emitForeignCall(ForeignCallLinkage linkage, Value result, Value[] arguments, Value[] temps, LIRFrameState info) {
-        throw new InternalError("NYI");
+        long maxOffset = linkage.getMaxCallTargetOffset();
+        if (SPARCAssembler.isWordDisp30(maxOffset)) {
+            append(new SPARCCall.DirectNearForeignCallOp(linkage, result, arguments, temps, info));
+        } else {
+            append(new SPARCCall.DirectFarForeignCallOp(this, linkage, result, arguments, temps, info));
+        }
     }
 
     @Override
@@ -398,98 +464,6 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public boolean canInlineConstant(Constant c) {
-        switch (c.getKind()) {
-            case Int:
-                return SPARCAssembler.isSimm13(c.asInt()) && !runtime.needsDataPatch(c);
-            case Long:
-                // return NumUtil.isInt(c.asLong()) && !runtime.needsDataPatch(c);
-                throw new InternalError("NYI");
-            case Object:
-                return c.isNull();
-            default:
-                return true;
-        }
-    }
-
-    @Override
-    public boolean canStoreConstant(Constant c) {
-        throw new InternalError("NYI");
-    }
-
-    @Override
-    public SPARCAddressValue emitAddress(Value base, long displacement, Value index, int scale) {
-        AllocatableValue baseRegister;
-        long finalDisp = displacement;
-        if (isConstant(base)) {
-            if (asConstant(base).isNull()) {
-                baseRegister = Value.ILLEGAL;
-            } else if (asConstant(base).getKind() != Kind.Object) {
-                finalDisp += asConstant(base).asLong();
-                baseRegister = Value.ILLEGAL;
-            } else {
-                baseRegister = load(base);
-            }
-        } else {
-            baseRegister = asAllocatable(base);
-        }
-
-        if (!Value.ILLEGAL.equals(index) && scale != 0) {
-            if (isConstant(index)) {
-                finalDisp += asConstant(index).asLong() * scale;
-            } else {
-                Value indexRegister;
-                if (scale != 1) {
-                    indexRegister = emitMul(index, Constant.forInt(scale));
-                } else {
-                    indexRegister = index;
-                }
-
-                if (Value.ILLEGAL.equals(baseRegister)) {
-                    baseRegister = asAllocatable(indexRegister);
-                } else {
-                    Variable newBase = newVariable(Kind.Int);
-                    emitMove(newBase, baseRegister);
-                    baseRegister = newBase;
-                    baseRegister = emitAdd(baseRegister, indexRegister);
-                }
-            }
-        }
-
-        return new SPARCAddressValue(target().wordKind, baseRegister, (int) finalDisp);
-    }
-
-    private SPARCAddressValue asAddress(Value address) {
-        if (address instanceof SPARCAddressValue) {
-            return (SPARCAddressValue) address;
-        } else {
-            return emitAddress(address, 0, Value.ILLEGAL, 0);
-        }
-    }
-
-    @Override
-    public Variable emitLoad(Kind kind, Value address, DeoptimizingNode deopting) {
-        SPARCAddressValue loadAddress = asAddress(address);
-        Variable result = newVariable(kind);
-        append(new LoadOp(kind, result, loadAddress, deopting != null ? state(deopting) : null));
-        return result;
-    }
-
-    @Override
-    public void emitStore(Kind kind, Value address, Value inputVal, DeoptimizingNode deopting) {
-        SPARCAddressValue storeAddress = asAddress(address);
-        Variable input = load(inputVal);
-        append(new StoreOp(kind, storeAddress, input, deopting != null ? state(deopting) : null));
-    }
-
-    @Override
-    public Value emitAddress(StackSlot address) {
-        Variable result = newVariable(target().wordKind);
-        append(new StackLoadAddressOp(result, address));
-        return result;
-    }
-
-    @Override
     public Value emitNegate(Value input) {
         Variable result = newVariable(input.getKind());
         switch (input.getKind()) {
@@ -531,7 +505,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitSub(Value a, Value b) {
+    public Variable emitSub(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -553,7 +527,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitMul(Value a, Value b) {
+    public Variable emitMul(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -645,7 +619,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitAnd(Value a, Value b) {
+    public Variable emitAnd(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -662,7 +636,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitOr(Value a, Value b) {
+    public Variable emitOr(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -678,7 +652,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitXor(Value a, Value b) {
+    public Variable emitXor(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -694,14 +668,14 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitShl(Value a, Value b) {
+    public Variable emitShl(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
                 append(new Op2Stack(ISHL, result, a, loadNonConst(b)));
                 break;
             case Long:
-                append(new Op1Stack(LSHL, result, loadNonConst(b)));
+                append(new Op2Stack(LSHL, result, a, loadNonConst(b)));
                 break;
             default:
                 throw GraalInternalError.shouldNotReachHere();
@@ -710,14 +684,14 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitShr(Value a, Value b) {
+    public Variable emitShr(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
                 append(new Op2Stack(ISHR, result, a, loadNonConst(b)));
                 break;
             case Long:
-                append(new Op1Stack(LSHR, result, loadNonConst(b)));
+                append(new Op2Stack(LSHR, result, a, loadNonConst(b)));
                 break;
             default:
                 throw GraalInternalError.shouldNotReachHere();
@@ -726,7 +700,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitUShr(Value a, Value b) {
+    public Variable emitUShr(Value a, Value b) {
         Variable result = newVariable(a.getKind());
         switch (a.getKind()) {
             case Int:
@@ -742,7 +716,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public Value emitConvert(Op opcode, Value inputVal) {
+    public Variable emitConvert(Op opcode, Value inputVal) {
         Variable input = load(inputVal);
         Variable result = newVariable(opcode.to);
         switch (opcode) {
@@ -829,12 +803,7 @@ public class SPARCLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public void visitCompareAndSwap(CompareAndSwapNode i) {
-        throw new InternalError("NYI");
-    }
-
-    @Override
-    public void visitSafepointNode(SafepointNode i) {
+    public void visitCompareAndSwap(LoweredCompareAndSwapNode i, Value address) {
         throw new InternalError("NYI");
     }
 

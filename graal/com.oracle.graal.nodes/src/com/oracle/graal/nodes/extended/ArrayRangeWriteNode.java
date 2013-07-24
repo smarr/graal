@@ -54,4 +54,11 @@ public abstract class ArrayRangeWriteNode extends AbstractStateSplit implements 
      * Return true if the written array is an object array, false if it is a primitive array.
      */
     public abstract boolean isObjectArray();
+
+    /**
+     * Returns whether this write is the initialization of the written location. If it is true, the
+     * old value of the memory location is either uninitialized or zero. If it is false, the memory
+     * location is guaranteed to contain a valid value or zero.
+     */
+    public abstract boolean isInitialization();
 }

@@ -609,7 +609,7 @@ public class InliningUtil {
 
             PhiNode returnValuePhi = null;
             if (invoke.asNode().kind() != Kind.Void) {
-                returnValuePhi = graph.unique(new PhiNode(invoke.asNode().kind(), returnMerge));
+                returnValuePhi = graph.add(new PhiNode(invoke.asNode().kind(), returnMerge));
             }
 
             MergeNode exceptionMerge = null;
@@ -622,7 +622,7 @@ public class InliningUtil {
 
                 FixedNode exceptionSux = exceptionEdge.next();
                 graph.addBeforeFixed(exceptionSux, exceptionMerge);
-                exceptionObjectPhi = graph.unique(new PhiNode(Kind.Object, exceptionMerge));
+                exceptionObjectPhi = graph.add(new PhiNode(Kind.Object, exceptionMerge));
                 exceptionMerge.setStateAfter(exceptionEdge.stateAfter().duplicateModified(invoke.stateAfter().bci, true, Kind.Object, exceptionObjectPhi));
             }
 
@@ -661,7 +661,7 @@ public class InliningUtil {
             invoke.asNode().replaceAtUsages(returnValuePhi);
             invoke.asNode().replaceAndDelete(null);
 
-            ArrayList<PiNode> replacementNodes = new ArrayList<>();
+            ArrayList<GuardedValueNode> replacementNodes = new ArrayList<>();
 
             // do the actual inlining for every invoke
             for (int i = 0; i < numberOfMethods; i++) {
@@ -677,7 +677,7 @@ public class InliningUtil {
 
                 ValueNode receiver = ((MethodCallTargetNode) invokeForInlining.callTarget()).receiver();
                 boolean exact = (getTypeCount(i) == 1 && !methodDispatch);
-                PiNode anchoredReceiver = createAnchoredReceiver(graph, node, commonType, receiver, exact);
+                GuardedValueNode anchoredReceiver = createAnchoredReceiver(graph, node, commonType, receiver, exact);
                 invokeForInlining.callTarget().replaceFirstInput(receiver, anchoredReceiver);
 
                 inline(invokeForInlining, methodAt(i), inlineableElementAt(i), assumptions, false);
@@ -956,7 +956,7 @@ public class InliningUtil {
 
             invocationEntry.setNext(invoke.asNode());
             ValueNode receiver = ((MethodCallTargetNode) invoke.callTarget()).receiver();
-            PiNode anchoredReceiver = createAnchoredReceiver(graph, invocationEntry, target.getDeclaringClass(), receiver, false);
+            GuardedValueNode anchoredReceiver = createAnchoredReceiver(graph, invocationEntry, target.getDeclaringClass(), receiver, false);
             invoke.callTarget().replaceFirstInput(receiver, anchoredReceiver);
             replaceInvokeCallTarget(invoke, graph, kind, target);
         }
@@ -1216,13 +1216,13 @@ public class InliningUtil {
         }
     }
 
-    private static PiNode createAnchoredReceiver(StructuredGraph graph, GuardingNode anchor, ResolvedJavaType commonType, ValueNode receiver, boolean exact) {
+    private static GuardedValueNode createAnchoredReceiver(StructuredGraph graph, GuardingNode anchor, ResolvedJavaType commonType, ValueNode receiver, boolean exact) {
         return createAnchoredReceiver(graph, anchor, receiver, exact ? StampFactory.exactNonNull(commonType) : StampFactory.declaredNonNull(commonType));
     }
 
-    private static PiNode createAnchoredReceiver(StructuredGraph graph, GuardingNode anchor, ValueNode receiver, Stamp stamp) {
+    private static GuardedValueNode createAnchoredReceiver(StructuredGraph graph, GuardingNode anchor, ValueNode receiver, Stamp stamp) {
         // to avoid that floating reads on receiver fields float above the type check
-        return graph.unique(new PiNode(receiver, stamp, anchor));
+        return graph.unique(new GuardedValueNode(receiver, anchor, stamp));
     }
 
     // TODO (chaeubl): cleanup this method
@@ -1390,6 +1390,12 @@ public class InliningUtil {
                             frameState.setOuterFrameState(outerFrameState);
                         }
                     }
+                } else if (node instanceof ValueAnchorNode) {
+                    /*
+                     * Synchronized inlinees have a valid point to deopt to after the monitor exit
+                     * at the end, so there's no need for the value anchor to be permanent anymore.
+                     */
+                    ((ValueAnchorNode) node).setPermanent(false);
                 }
                 if (callerLockDepth != 0 && node instanceof MonitorReference) {
                     MonitorReference monitor = (MonitorReference) node;
@@ -1441,7 +1447,8 @@ public class InliningUtil {
         if (firstParam.kind() == Kind.Object && !firstParam.objectStamp().nonNull()) {
             assert !firstParam.objectStamp().alwaysNull();
             IsNullNode condition = graph.unique(new IsNullNode(firstParam));
-            GuardingPiNode nonNullReceiver = graph.add(new GuardingPiNode(firstParam, condition, true, NullCheckException, InvalidateReprofile, objectNonNull()));
+            Stamp stamp = firstParam.stamp().join(objectNonNull());
+            GuardingPiNode nonNullReceiver = graph.add(new GuardingPiNode(firstParam, condition, true, NullCheckException, InvalidateReprofile, stamp));
             graph.addBeforeFixed(invoke.asNode(), nonNullReceiver);
             callTarget.replaceFirstInput(firstParam, nonNullReceiver);
             return nonNullReceiver;

@@ -2206,19 +2206,6 @@ bool Arguments::check_vm_args_consistency() {
 #endif
   }
 #ifdef GRAAL
-  if (UseCompressedKlassPointers) {
-    if (IgnoreUnrecognizedVMOptions) {
-      warning("UseCompressedKlassPointers is disabled, because it is not supported by Graal");
-      FLAG_SET_CMDLINE(bool, UseCompressedKlassPointers, false);
-    } else {
-      jio_fprintf(defaultStream::error_stream(),
-                    "UseCompressedKlassPointers are not supported in Graal at the moment\n");
-      status = false;
-    }
-  } else {
-    // This prevents the flag being set to true by set_ergonomics_flags()
-    FLAG_SET_CMDLINE(bool, UseCompressedKlassPointers, false);
-  }
   if (UseG1GC) {
       if (IgnoreUnrecognizedVMOptions) {
         warning("UseG1GC is still experimental in Graal, use SerialGC instead ");
@@ -2227,10 +2214,10 @@ bool Arguments::check_vm_args_consistency() {
         warning("UseG1GC is still experimental in Graal, use SerialGC instead ");
         status = true;
       }
-    } else {
+  } else {
       // This prevents the flag being set to true by set_ergonomics_flags()
       FLAG_SET_CMDLINE(bool, UseG1GC, false);
-    }
+  }
 
   if (!ScavengeRootsInCode) {
       warning("forcing ScavengeRootsInCode non-zero because Graal is enabled");

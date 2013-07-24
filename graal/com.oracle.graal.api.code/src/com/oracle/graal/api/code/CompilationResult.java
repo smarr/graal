@@ -137,12 +137,15 @@ public class CompilationResult implements Serializable {
     }
 
     /**
-     * Represents a reference to data from the code. The associated data can be any constant.
+     * Represents a reference to data from the code. The associated data can be either a
+     * {@link Constant} or a raw byte array. The raw byte array is patched as is, no endian swapping
+     * is done on it.
      */
     public static final class DataPatch extends Site {
 
         private static final long serialVersionUID = 5771730331604867476L;
         public final Constant constant;
+        public final byte[] rawConstant;
         public final int alignment;
 
         /**
@@ -150,16 +153,41 @@ public class CompilationResult implements Serializable {
          */
         public final boolean inlined;
 
+        DataPatch(int pcOffset, byte[] data, int alignment) {
+            this(pcOffset, null, data, alignment, false);
+        }
+
         DataPatch(int pcOffset, Constant data, int alignment, boolean inlined) {
+            this(pcOffset, data, null, alignment, inlined);
+        }
+
+        private DataPatch(int pcOffset, Constant data, byte[] rawData, int alignment, boolean inlined) {
             super(pcOffset);
+            assert (data == null) != (rawData == null) : "only one of data and rawData is allowed";
+            assert !inlined || rawData == null : "rawData can not be inlined";
             this.constant = data;
+            this.rawConstant = rawData;
             this.alignment = alignment;
             this.inlined = inlined;
         }
 
+        public String getDataString() {
+            if (constant != null) {
+                return constant.toString();
+            } else {
+                Formatter ret = new Formatter();
+                boolean first = true;
+                for (byte b : rawConstant) {
+                    ret.format(first ? "%02X" : " %02X", b);
+                    first = false;
+                }
+                return ret.toString();
+            }
+        }
+
         @Override
         public String toString() {
-            return String.format("%d[<data patch referring to data %s>]", pcOffset, constant);
+            return String.format("%d[<data patch referring to data %s>]", pcOffset, getDataString());
         }
     }
 
@@ -369,6 +397,20 @@ public class CompilationResult implements Serializable {
     public void recordDataReference(int codePos, Constant data, int alignment, boolean inlined) {
         assert codePos >= 0 && data != null;
         dataReferences.add(new DataPatch(codePos, data, alignment, inlined));
+    }
+
+    /**
+     * Records a reference to the data section in the code section (e.g. to load an integer or
+     * floating point constant).
+     * 
+     * @param codePos the position in the code where the data reference occurs
+     * @param data a byte array containing the raw data that is referenced
+     * @param alignment the alignment requirement of the data or 0 if there is no alignment
+     *            requirement
+     */
+    public void recordDataReference(int codePos, byte[] data, int alignment) {
+        assert codePos >= 0 && data != null && data.length > 0;
+        dataReferences.add(new DataPatch(codePos, data, alignment));
     }
 
     /**

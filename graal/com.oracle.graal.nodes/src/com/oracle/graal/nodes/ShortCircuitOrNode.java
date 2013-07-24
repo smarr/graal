@@ -25,17 +25,12 @@ package com.oracle.graal.nodes;
 import com.oracle.graal.nodes.spi.*;
 
 /**
- * This node is true if {@link #getX() x} <b>and</b> {@link #getY() y} are true.
- * 
+ * The short-circuit <b>OR</b> (i.e. {@code ||} in Java) operator.
  */
-public class LogicConjunctionNode extends LogicBinaryNode implements Canonicalizable {
+public class ShortCircuitOrNode extends ShortCircuitBooleanNode implements Canonicalizable {
 
-    public LogicConjunctionNode(LogicNode x, LogicNode y) {
-        this(x, false, y, false);
-    }
-
-    public LogicConjunctionNode(LogicNode x, boolean xNegated, LogicNode y, boolean yNegated) {
-        super(x, xNegated, y, yNegated);
+    public ShortCircuitOrNode(LogicNode x, boolean xNegated, LogicNode y, boolean yNegated, double shortCircuitProbability) {
+        super(x, xNegated, y, yNegated, shortCircuitProbability);
     }
 
     @Override
@@ -43,28 +38,52 @@ public class LogicConjunctionNode extends LogicBinaryNode implements Canonicaliz
         LogicNode x = getX();
         LogicNode y = getY();
         if (x == y) {
-            return x;
+            // @formatter:off
+            //  a ||  a = a
+            //  a || !a = true
+            // !a ||  a = true
+            // !a || !a = !a
+            // @formatter:on
+            if (isXNegated()) {
+                if (isYNegated()) {
+                    // !a || !a = !a
+                    negateUsages();
+                    return x;
+                } else {
+                    // !a || a = true
+                    return LogicConstantNode.tautology(graph());
+                }
+            } else {
+                if (isYNegated()) {
+                    // a || !a = true
+                    return LogicConstantNode.tautology(graph());
+                } else {
+                    // a || a = a
+                    return x;
+                }
+            }
         }
         if (x instanceof LogicConstantNode) {
             if (((LogicConstantNode) x).getValue() ^ isXNegated()) {
+                return LogicConstantNode.tautology(graph());
+            } else {
                 if (isYNegated()) {
                     negateUsages();
                 }
                 return y;
-            } else {
-                return LogicConstantNode.contradiction(graph());
             }
         }
         if (y instanceof LogicConstantNode) {
             if (((LogicConstantNode) y).getValue() ^ isYNegated()) {
+                return LogicConstantNode.tautology(graph());
+            } else {
                 if (isXNegated()) {
                     negateUsages();
                 }
                 return x;
-            } else {
-                return LogicConstantNode.contradiction(graph());
             }
         }
         return this;
     }
+
 }

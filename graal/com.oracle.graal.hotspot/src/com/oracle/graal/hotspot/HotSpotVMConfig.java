@@ -58,6 +58,9 @@ public final class HotSpotVMConfig extends CompilerObject {
     public long narrowOopBase;
     public int narrowOopShift;
     public int logMinObjAlignment;
+    public long narrowKlassBase;
+    public int narrowKlassShift;
+    public int logKlassAlignment;
 
     // CPU capabilities
     public int useSSE;
@@ -264,6 +267,12 @@ public final class HotSpotVMConfig extends CompilerObject {
      * The value of JavaThread::is_method_handle_return_offset().
      */
     public int threadIsMethodHandleReturnOffset;
+
+    /**
+     * Bit pattern that represents a non-oop. Neither the high bits nor the low bits of this value
+     * are allowed to look like (respectively) the high or low bits of a real oop.
+     */
+    public long nonOopBits;
 
     public long verifyOopCounterAddress;
     public long verifyOopMask;

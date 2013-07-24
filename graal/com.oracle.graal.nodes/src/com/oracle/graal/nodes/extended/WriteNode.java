@@ -37,6 +37,7 @@ public final class WriteNode extends AccessNode implements StateSplit, LIRLowera
 
     @Input private ValueNode value;
     @Input(notDataflow = true) private FrameState stateAfter;
+    private final boolean initialization;
 
     public FrameState stateAfter() {
         return stateAfter;
@@ -56,9 +57,23 @@ public final class WriteNode extends AccessNode implements StateSplit, LIRLowera
         return value;
     }
 
-    public WriteNode(ValueNode object, ValueNode value, ValueNode location, WriteBarrierType barrierType, boolean compress) {
-        super(object, location, StampFactory.forVoid(), barrierType, compress);
+    /**
+     * Returns whether this write is the initialization of the written location. If it is true, the
+     * old value of the memory location is either uninitialized or zero. If it is false, the memory
+     * location is guaranteed to contain a valid value or zero.
+     */
+    public boolean isInitialization() {
+        return initialization;
+    }
+
+    public WriteNode(ValueNode object, ValueNode value, ValueNode location, BarrierType barrierType, boolean compressible) {
+        this(object, value, location, barrierType, compressible, false);
+    }
+
+    public WriteNode(ValueNode object, ValueNode value, ValueNode location, BarrierType barrierType, boolean compressible, boolean initialization) {
+        super(object, location, StampFactory.forVoid(), barrierType, compressible);
         this.value = value;
+        this.initialization = initialization;
     }
 
     @Override
@@ -68,7 +83,7 @@ public final class WriteNode extends AccessNode implements StateSplit, LIRLowera
     }
 
     @NodeIntrinsic
-    public static native void writeMemory(Object object, Object value, Location location, @ConstantNodeParameter WriteBarrierType barrierType, @ConstantNodeParameter boolean compress);
+    public static native void writeMemory(Object object, Object value, Location location, @ConstantNodeParameter BarrierType barrierType, @ConstantNodeParameter boolean compressible);
 
     @Override
     public LocationIdentity getLocationIdentity() {

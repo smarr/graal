@@ -32,6 +32,7 @@ import javax.lang.model.type.*;
 import javax.lang.model.util.*;
 
 import com.oracle.truffle.api.dsl.*;
+import com.oracle.truffle.api.nodes.*;
 import com.oracle.truffle.api.nodes.NodeInfo.Kind;
 import com.oracle.truffle.dsl.processor.*;
 import com.oracle.truffle.dsl.processor.ast.*;
@@ -1113,12 +1114,22 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
             }
         }
 
+        private CodeTree truffleBooleanOption(CodeTreeBuilder parent, String name) {
+            CodeTreeBuilder builder = parent.create();
+            builder.staticReference(getContext().getTruffleTypes().getTruffleOptions(), name);
+            return builder.getRoot();
+        }
+
         private Element createInfoMessage(NodeData node) {
             CodeExecutableElement method = new CodeExecutableElement(modifiers(PROTECTED, STATIC), getContext().getType(String.class), "createInfo0");
             method.addParameter(new CodeVariableElement(getContext().getType(String.class), "message"));
             addInternalValueParameters(method, node.getGenericSpecialization(), false, false);
 
             CodeTreeBuilder builder = method.createBuilder();
+
+            builder.startIf().tree(truffleBooleanOption(builder, TruffleTypes.OPTION_DETAILED_REWRITE_REASONS)).end();
+            builder.startBlock();
+
             builder.startStatement().string("StringBuilder builder = new StringBuilder(message)").end();
             builder.startStatement().startCall("builder", "append").doubleQuote(" (").end().end();
 
@@ -1159,8 +1170,12 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
             }
 
             builder.startStatement().startCall("builder", "append").doubleQuote(")").end().end();
-
             builder.startReturn().string("builder.toString()").end();
+
+            builder.end();
+            builder.startElseBlock();
+            builder.startReturn().string("message").end();
+            builder.end();
 
             return method;
         }
@@ -1212,6 +1227,12 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
         private CodeExecutableElement createCachedExecute(NodeData node, SpecializationData polymorph, CodeExecutableElement genericPolymorphMethod) {
             String name = executeCachedName(polymorph);
             CodeExecutableElement cachedExecute = new CodeExecutableElement(modifiers(PROTECTED), polymorph.getReturnType().getType(), name);
+
+            ExecutableTypeData sourceExecutableType = node.findExecutableType(polymorph.getReturnType().getTypeSystemType(), 0);
+            boolean sourceThrowsUnexpected = sourceExecutableType != null && sourceExecutableType.hasUnexpectedValue(getContext());
+            if (sourceThrowsUnexpected) {
+                cachedExecute.getThrownTypes().add(getContext().getType(UnexpectedResultException.class));
+            }
             addInternalValueParameters(cachedExecute, polymorph, true, true);
 
             if (polymorph == node.getGenericPolymorphicSpecialization()) {
@@ -1353,7 +1374,25 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
                 if (Utils.isAssignable(getContext(), var.asType(), getContext().getTruffleTypes().getNode())) {
                     builder.string(" = adoptChild(copy.").string(varName).string(")");
                 } else if (Utils.isAssignable(getContext(), var.asType(), getContext().getTruffleTypes().getNodeArray())) {
-                    builder.string(" = adoptChildren(copy.").string(varName).string(")");
+                    NodeData node = getModel().getNode();
+                    NodeChildData child = node.findChild(varName);
+                    if (child != null) {
+                        builder.string(" = adoptChildren(");
+                        builder.string("new ").type((child.getNodeType())).string(" {");
+                        builder.startCommaGroup();
+                        for (ActualParameter parameter : getModel().getParameters()) {
+                            NodeChildData foundChild = node.findChild(parameter.getSpecification().getName());
+                            if (foundChild == child) {
+                                builder.startGroup();
+                                builder.string("copy.").string(varName).string("[").string(String.valueOf(parameter.getIndex())).string("]");
+                                builder.end();
+                            }
+                        }
+
+                        builder.end().string("})");
+                    } else {
+                        builder.string(" = adoptChildren(copy.").string(varName).string(")");
+                    }
                 } else {
                     builder.string(" = copy.").string(varName);
                 }
@@ -1449,7 +1488,10 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
         private CodeExecutableElement createGenericExecute(NodeData node) {
             TypeMirror genericReturnType = node.getGenericSpecialization().getReturnType().getType();
             CodeExecutableElement method = new CodeExecutableElement(modifiers(PROTECTED), genericReturnType, EXECUTE_GENERIC_NAME);
-            addInternalValueParameters(method, node.getGenericSpecialization(), true, false);
+
+            method.getAnnotationMirrors().add(new CodeAnnotationMirror(getContext().getTruffleTypes().getSlowPath()));
+
+            addInternalValueParameters(method, node.getGenericSpecialization(), node.needsFrame(), false);
             CodeTreeBuilder builder = method.createBuilder();
 
             String prefix = null;
@@ -2251,7 +2293,7 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
             builder.end();
 
             builder.startReturn().startCall("super", EXECUTE_GENERIC_NAME);
-            addInternalValueParameterNames(builder, specialization, node.getGenericSpecialization(), null, true, true);
+            addInternalValueParameterNames(builder, specialization, node.getGenericSpecialization(), null, node.needsFrame(), true);
             builder.end().end();
 
             builder.end().startElseBlock();
@@ -2417,18 +2459,25 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
                 emitEncounteredSynthetic(builder, specialization);
             } else if (specialization.isGeneric()) {
                 returnBuilder.startCall("super", EXECUTE_GENERIC_NAME);
-                addInternalValueParameterNames(returnBuilder, specialization, specialization, null, true, true);
+                addInternalValueParameterNames(returnBuilder, specialization, specialization, null, node.needsFrame(), true);
                 returnBuilder.end();
             } else {
                 returnBuilder.tree(createTemplateMethodCall(returnBuilder, null, specialization, specialization, null));
             }
 
             if (!returnBuilder.isEmpty()) {
-                builder.startReturn();
+
+                ExecutableTypeData sourceExecutableType = node.findExecutableType(specialization.getReturnType().getTypeSystemType(), 0);
+                boolean sourceThrowsUnexpected = sourceExecutableType != null && sourceExecutableType.hasUnexpectedValue(getContext());
+                boolean targetSupportsUnexpected = executable.hasUnexpectedValue(getContext());
 
                 TypeData targetType = node.getTypeSystem().findTypeData(builder.findMethod().getReturnType());
                 TypeData sourceType = specialization.getReturnType().getTypeSystemType();
 
+                if (specialization.isPolymorphic() && sourceThrowsUnexpected && !targetSupportsUnexpected) {
+                    builder.startTryBlock();
+                }
+                builder.startReturn();
                 if (targetType == null || sourceType == null) {
                     builder.tree(returnBuilder.getRoot());
                 } else if (sourceType.needsCastTo(getContext(), targetType)) {
@@ -2437,6 +2486,19 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
                     builder.tree(returnBuilder.getRoot());
                 }
                 builder.end();
+                if (specialization.isPolymorphic() && sourceThrowsUnexpected && !targetSupportsUnexpected) {
+                    builder.end();
+                    builder.startCatchBlock(getUnexpectedValueException(), "ex");
+                    builder.startReturn();
+                    CodeTree returns = CodeTreeBuilder.singleString("ex.getResult()");
+                    if (sourceType.needsCastTo(getContext(), targetType)) {
+                        builder.tree(createCallTypeSystemMethod(context, parent, node, TypeSystemCodeGenerator.asTypeMethodName(targetType), returns));
+                    } else {
+                        builder.tree(returns);
+                    }
+                    builder.end();
+                    builder.end();
+                }
             }
 
             if (!specialization.getExceptions().isEmpty()) {

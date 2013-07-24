@@ -23,6 +23,7 @@
 package com.oracle.graal.hotspot.replacements;
 
 import static com.oracle.graal.hotspot.replacements.HotSpotReplacementsUtil.*;
+import static com.oracle.graal.nodes.extended.BranchProbabilityNode.*;
 import static com.oracle.graal.phases.GraalOptions.*;
 import static com.oracle.graal.replacements.SnippetTemplate.*;
 
@@ -32,6 +33,7 @@ import com.oracle.graal.graph.Node.ConstantNodeParameter;
 import com.oracle.graal.graph.Node.NodeIntrinsic;
 import com.oracle.graal.hotspot.nodes.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.HeapAccess.BarrierType;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.*;
@@ -42,14 +44,12 @@ import com.oracle.graal.replacements.SnippetTemplate.Arguments;
 import com.oracle.graal.replacements.SnippetTemplate.SnippetInfo;
 import com.oracle.graal.replacements.nodes.*;
 import com.oracle.graal.word.*;
-import static com.oracle.graal.replacements.nodes.BranchProbabilityNode.*;
 
 public class WriteBarrierSnippets implements Snippets {
 
     private static final SnippetCounter.Group countersWriteBarriers = SnippetCounters.getValue() ? new SnippetCounter.Group("WriteBarriers") : null;
     private static final SnippetCounter serialFieldWriteBarrierCounter = new SnippetCounter(countersWriteBarriers, "serialFieldWriteBarrier", "Number of Serial Field Write Barriers");
     private static final SnippetCounter serialArrayWriteBarrierCounter = new SnippetCounter(countersWriteBarriers, "serialArrayWriteBarrier", "Number of Serial Array Write Barriers");
-    private static final int gcStartCycles = GraalOptions.GCDebugStartCycle.getValue();
 
     @Snippet
     public static void serialArrayWriteBarrier(Object obj, Object location, @ConstantParameter boolean usePrecise) {
@@ -119,7 +119,7 @@ public class WriteBarrierSnippets implements Snippets {
             // If the previous value has to be loaded (before the write), the load is issued.
             // The load is always issued except the cases of CAS and referent field.
             if (probability(LIKELY_PROBABILITY, doLoad)) {
-                previousOop = (Word) Word.fromObject(field.readObjectCompressed(0));
+                previousOop = (Word) Word.fromObject(field.readObject(0, BarrierType.NONE, true));
                 if (trace) {
                     log(trace, "[%d] G1-Pre Thread %p Previous Object %p\n ", gcCycle, thread.rawValue(), previousOop.rawValue());
                     verifyOop(previousOop.toObject());
@@ -226,7 +226,7 @@ public class WriteBarrierSnippets implements Snippets {
 
         for (int i = startIndex; i < length; i++) {
             Word address = (Word) Word.fromObject(dest).add(header).add(Word.unsigned(i * (long) scale));
-            oop = (Word) Word.fromObject(address.readObjectCompressed(0));
+            oop = (Word) Word.fromObject(address.readObject(0, BarrierType.NONE, true));
             if (oop.notEqual(0)) {
                 if (indexValue.notEqual(0)) {
                     Word nextIndex = indexValue.subtract(wordSize());
@@ -295,6 +295,8 @@ public class WriteBarrierSnippets implements Snippets {
         private final SnippetInfo serialArrayWriteBarrier = snippet(WriteBarrierSnippets.class, "serialArrayWriteBarrier");
         private final SnippetInfo serialArrayRangeWriteBarrier = snippet(WriteBarrierSnippets.class, "serialArrayRangeWriteBarrier");
         private final SnippetInfo g1PreWriteBarrier = snippet(WriteBarrierSnippets.class, "g1PreWriteBarrier");
+
+        private final SnippetInfo g1ReferentReadBarrier = snippet(WriteBarrierSnippets.class, "g1PreWriteBarrier");
         private final SnippetInfo g1PostWriteBarrier = snippet(WriteBarrierSnippets.class, "g1PostWriteBarrier");
         private final SnippetInfo g1ArrayRangePreWriteBarrier = snippet(WriteBarrierSnippets.class, "g1ArrayRangePreWriteBarrier");
         private final SnippetInfo g1ArrayRangePostWriteBarrier = snippet(WriteBarrierSnippets.class, "g1ArrayRangePostWriteBarrier");
@@ -325,9 +327,20 @@ public class WriteBarrierSnippets implements Snippets {
             args.add("expectedObject", writeBarrierPre.getExpectedObject());
             args.add("location", writeBarrierPre.getLocation());
             args.addConst("doLoad", writeBarrierPre.doLoad());
-            args.addConst("nullCheck", !writeBarrierPre.getObject().stamp().nonNull());
+            args.addConst("nullCheck", writeBarrierPre.getNullCheck());
             args.addConst("trace", traceBarrier());
             template(args).instantiate(runtime, writeBarrierPre, DEFAULT_REPLACER, args);
+        }
+
+        public void lower(G1ReferentFieldReadBarrier readBarrier, @SuppressWarnings("unused") LoweringTool tool) {
+            Arguments args = new Arguments(g1ReferentReadBarrier);
+            args.add("object", readBarrier.getObject());
+            args.add("expectedObject", readBarrier.getExpectedObject());
+            args.add("location", readBarrier.getLocation());
+            args.addConst("doLoad", readBarrier.doLoad());
+            args.addConst("nullCheck", readBarrier.getNullCheck());
+            args.addConst("trace", traceBarrier());
+            template(args).instantiate(runtime, readBarrier, DEFAULT_REPLACER, args);
         }
 
         public void lower(G1PostWriteBarrier writeBarrierPost, @SuppressWarnings("unused") LoweringTool tool) {
@@ -379,6 +392,6 @@ public class WriteBarrierSnippets implements Snippets {
     }
 
     private static boolean traceBarrier() {
-        return gcStartCycles > 0 && ((int) Word.unsigned(HotSpotReplacementsUtil.gcTotalCollectionsAddress()).readLong(0) > gcStartCycles);
+        return GraalOptions.GCDebugStartCycle.getValue() > 0 && ((int) Word.unsigned(HotSpotReplacementsUtil.gcTotalCollectionsAddress()).readLong(0) > GraalOptions.GCDebugStartCycle.getValue());
     }
 }

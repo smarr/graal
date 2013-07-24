@@ -30,6 +30,7 @@ import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.HeapAccess.BarrierType;
 import com.oracle.graal.nodes.calc.*;
 
 public abstract class Word implements Signed, Unsigned, Pointer {
@@ -59,8 +60,9 @@ public abstract class Word implements Signed, Unsigned, Pointer {
          COMPARISON,
          NOT,
          READ,
-         READ_COMPRESSED,
+         READ_HEAP,
          WRITE,
+         INITIALIZE,
          ZERO,
          FROM_UNSIGNED,
          FROM_SIGNED,
@@ -758,6 +760,12 @@ public abstract class Word implements Signed, Unsigned, Pointer {
     }
 
     @Override
+    @Operation(opcode = Opcode.INITIALIZE)
+    public void initializeWord(WordBase offset, WordBase val, LocationIdentity locationIdentity) {
+        unsafe.putAddress(add((Word) offset).unbox(), ((Word) val).unbox());
+    }
+
+    @Override
     @Operation(opcode = Opcode.WRITE)
     public native void writeObject(WordBase offset, Object val, LocationIdentity locationIdentity);
 
@@ -807,6 +815,12 @@ public abstract class Word implements Signed, Unsigned, Pointer {
     @Operation(opcode = Opcode.WRITE)
     public void writeWord(int offset, WordBase val, LocationIdentity locationIdentity) {
         writeWord(signed(offset), val, locationIdentity);
+    }
+
+    @Override
+    @Operation(opcode = Opcode.INITIALIZE)
+    public void initializeWord(int offset, WordBase val, LocationIdentity locationIdentity) {
+        initializeWord(signed(offset), val, locationIdentity);
     }
 
     @Override
@@ -867,9 +881,8 @@ public abstract class Word implements Signed, Unsigned, Pointer {
     @Operation(opcode = Opcode.READ)
     public native Object readObject(WordBase offset);
 
-    @Override
-    @Operation(opcode = Opcode.READ_COMPRESSED)
-    public native Object readObjectCompressed(WordBase offset);
+    @Operation(opcode = Opcode.READ_HEAP)
+    public native Object readObject(WordBase offset, BarrierType barrierType, boolean compressible);
 
     @Override
     @Operation(opcode = Opcode.READ)
@@ -925,10 +938,9 @@ public abstract class Word implements Signed, Unsigned, Pointer {
         return readObject(signed(offset));
     }
 
-    @Override
-    @Operation(opcode = Opcode.READ_COMPRESSED)
-    public Object readObjectCompressed(int offset) {
-        return readObjectCompressed(signed(offset));
+    @Operation(opcode = Opcode.READ_HEAP)
+    public Object readObject(int offset, BarrierType barrierType, boolean compressible) {
+        return readObject(signed(offset), barrierType, compressible);
     }
 
     @Override

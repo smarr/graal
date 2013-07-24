@@ -25,7 +25,6 @@ package com.oracle.graal.nodes.java;
 import static com.oracle.graal.graph.UnsafeAccess.*;
 
 import com.oracle.graal.api.meta.*;
-import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
@@ -35,7 +34,7 @@ import com.oracle.graal.nodes.type.*;
  * Represents an atomic compare-and-swap operation The result is a boolean that contains whether the
  * value matched the expected value.
  */
-public class CompareAndSwapNode extends AbstractStateSplit implements StateSplit, LIRLowerable, Lowerable, MemoryCheckpoint.Single, Node.IterableNodeType, HeapAccess {
+public class CompareAndSwapNode extends AbstractStateSplit implements StateSplit, Lowerable, MemoryCheckpoint.Single {
 
     @Input private ValueNode object;
     @Input private ValueNode offset;
@@ -43,8 +42,6 @@ public class CompareAndSwapNode extends AbstractStateSplit implements StateSplit
     @Input private ValueNode newValue;
     @Input private LocationNode location;
     private final int displacement;
-    private WriteBarrierType barrierType;
-    private boolean compress;
 
     public ValueNode object() {
         return object;
@@ -75,24 +72,6 @@ public class CompareAndSwapNode extends AbstractStateSplit implements StateSplit
         this.location = location;
     }
 
-    @Override
-    public WriteBarrierType getWriteBarrierType() {
-        return barrierType;
-    }
-
-    public void setWriteBarrierType(WriteBarrierType type) {
-        this.barrierType = type;
-    }
-
-    @Override
-    public boolean compress() {
-        return compress;
-    }
-
-    public void setCompress() {
-        this.compress = true;
-    }
-
     public CompareAndSwapNode(ValueNode object, int displacement, ValueNode offset, ValueNode expected, ValueNode newValue) {
         super(StampFactory.forKind(Kind.Boolean.getStackKind()));
         assert expected.kind() == newValue.kind();
@@ -101,18 +80,11 @@ public class CompareAndSwapNode extends AbstractStateSplit implements StateSplit
         this.expected = expected;
         this.newValue = newValue;
         this.displacement = displacement;
-        this.barrierType = WriteBarrierType.NONE;
-        this.compress = false;
     }
 
     @Override
     public LocationIdentity getLocationIdentity() {
         return LocationIdentity.ANY_LOCATION;
-    }
-
-    @Override
-    public void generate(LIRGeneratorTool gen) {
-        gen.visitCompareAndSwap(this);
     }
 
     @Override

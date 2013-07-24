@@ -63,6 +63,8 @@ public final class GraalOptions {
     public static final OptionValue<Integer> SmallCompiledLowLevelGraphSize = new OptionValue<>(300);
     @Option(help = "")
     public static final OptionValue<Double> LimitInlinedInvokes = new OptionValue<>(5.0);
+    @Option(help = "")
+    public static final OptionValue<Boolean> InlineEverything = new OptionValue<>(false);
 
     // escape analysis settings
     @Option(help = "")
@@ -88,8 +90,6 @@ public final class GraalOptions {
     public static final OptionValue<Integer> DeoptsToDisableOptimisticOptimization = new OptionValue<>(40);
 
     // comilation queue
-    @Option(help = "")
-    public static final OptionValue<Boolean> DynamicCompilePriority = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<String> CompileTheWorld = new OptionValue<>(null);
     @Option(help = "")
@@ -148,6 +148,8 @@ public final class GraalOptions {
     // Ideal graph visualizer output settings
     @Option(help = "")
     public static final OptionValue<Boolean> PrintBinaryGraphs = new OptionValue<>(true);
+    @Option(help = "outputs probabilities for fixed nodes during binary graph dumping")
+    public static final OptionValue<Boolean> PrintGraphProbabilities = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> PrintCFG = new OptionValue<>(false);
     @Option(help = "")

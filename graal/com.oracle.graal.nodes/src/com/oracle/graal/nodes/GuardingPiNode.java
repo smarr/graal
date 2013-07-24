@@ -34,7 +34,7 @@ import com.oracle.graal.nodes.type.*;
  * A node that changes the stamp of its input based on some condition being true.
  */
 @NodeInfo(nameTemplate = "GuardingPi(!={p#negated}) {p#reason/s}")
-public class GuardingPiNode extends FixedWithNextNode implements Lowerable, GuardingNode, Canonicalizable {
+public class GuardingPiNode extends FixedWithNextNode implements Lowerable, GuardingNode, Canonicalizable, ValueProxy {
 
     @Input private ValueNode object;
     @Input private LogicNode condition;
@@ -46,13 +46,28 @@ public class GuardingPiNode extends FixedWithNextNode implements Lowerable, Guar
         return object;
     }
 
-    public GuardingPiNode(ValueNode object) {
+    public LogicNode condition() {
+        return condition;
+    }
+
+    /**
+     * Constructor for {@link #guardingNonNull(Object)} node intrinsic.
+     */
+    private GuardingPiNode(ValueNode object) {
         this(object, object.graph().unique(new IsNullNode(object)), true, DeoptimizationReason.NullCheckException, DeoptimizationAction.None, object.stamp().join(StampFactory.objectNonNull()));
     }
 
+    /**
+     * Creates a guarding pi node.
+     * 
+     * @param object the object whose type is refined if this guard succeeds
+     * @param condition the condition to test
+     * @param negateCondition the guard succeeds if {@code condition != negateCondition}
+     * @param stamp the refined type of the object if the guard succeeds
+     */
     public GuardingPiNode(ValueNode object, ValueNode condition, boolean negateCondition, DeoptimizationReason reason, DeoptimizationAction action, Stamp stamp) {
-        super(object.stamp().join(stamp));
-        assert stamp() != null;
+        super(stamp);
+        assert stamp != null;
         this.object = object;
         this.condition = (LogicNode) condition;
         this.reason = reason;
@@ -97,5 +112,10 @@ public class GuardingPiNode extends FixedWithNextNode implements Lowerable, Guar
     @Override
     public ValueNode asNode() {
         return this;
+    }
+
+    @Override
+    public ValueNode getOriginalValue() {
+        return object;
     }
 }

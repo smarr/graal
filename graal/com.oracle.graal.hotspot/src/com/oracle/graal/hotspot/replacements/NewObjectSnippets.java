@@ -25,11 +25,11 @@ package com.oracle.graal.hotspot.replacements;
 import static com.oracle.graal.api.code.UnsignedMath.*;
 import static com.oracle.graal.api.meta.LocationIdentity.*;
 import static com.oracle.graal.hotspot.replacements.HotSpotReplacementsUtil.*;
+import static com.oracle.graal.nodes.extended.BranchProbabilityNode.*;
 import static com.oracle.graal.nodes.extended.UnsafeArrayCastNode.*;
 import static com.oracle.graal.nodes.extended.UnsafeCastNode.*;
 import static com.oracle.graal.phases.GraalOptions.*;
 import static com.oracle.graal.replacements.SnippetTemplate.*;
-import static com.oracle.graal.replacements.nodes.BranchProbabilityNode.*;
 import static com.oracle.graal.replacements.nodes.ExplodeLoopNode.*;
 
 import com.oracle.graal.api.code.*;
@@ -203,12 +203,12 @@ public class NewObjectSnippets implements Snippets {
             if (size <= MAX_UNROLLED_OBJECT_ZEROING_SIZE) {
                 new_seqInit.inc();
                 explodeLoop();
-                for (int offset = 2 * wordSize(); offset < size; offset += wordSize()) {
+                for (int offset = instanceHeaderSize(); offset < size; offset += wordSize()) {
                     memory.writeWord(offset, Word.zero(), ANY_LOCATION);
                 }
             } else {
                 new_loopInit.inc();
-                for (int offset = 2 * wordSize(); offset < size; offset += wordSize()) {
+                for (int offset = instanceHeaderSize(); offset < size; offset += wordSize()) {
                     memory.writeWord(offset, Word.zero(), ANY_LOCATION);
                 }
             }
@@ -259,7 +259,7 @@ public class NewObjectSnippets implements Snippets {
             args.addConst("size", size);
             args.add("hub", hub);
             args.add("prototypeMarkWord", type.prototypeMarkWord());
-            args.addConst("fillContents", useG1GC() ? true : newInstanceNode.fillContents());
+            args.addConst("fillContents", newInstanceNode.fillContents());
 
             SnippetTemplate template = template(args);
             Debug.log("Lowering allocateInstance in %s: node=%s, template=%s, arguments=%s", graph, newInstanceNode, template, args);
@@ -284,7 +284,7 @@ public class NewObjectSnippets implements Snippets {
             args.add("prototypeMarkWord", arrayType.prototypeMarkWord());
             args.addConst("headerSize", headerSize);
             args.addConst("log2ElementSize", log2ElementSize);
-            args.addConst("fillContents", useG1GC() ? true : newArrayNode.fillContents());
+            args.addConst("fillContents", newArrayNode.fillContents());
 
             SnippetTemplate template = template(args);
             Debug.log("Lowering allocateArray in %s: node=%s, template=%s, arguments=%s", graph, newArrayNode, template, args);
@@ -295,7 +295,7 @@ public class NewObjectSnippets implements Snippets {
             Arguments args = new Arguments(allocateArrayDynamic);
             args.add("elementType", newArrayNode.getElementType());
             args.add("length", newArrayNode.length());
-            args.addConst("fillContents", useG1GC() ? true : newArrayNode.fillContents());
+            args.addConst("fillContents", newArrayNode.fillContents());
 
             SnippetTemplate template = template(args);
             template.instantiate(runtime, newArrayNode, DEFAULT_REPLACER, args);

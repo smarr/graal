@@ -29,7 +29,7 @@ import java.lang.reflect.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
-import com.oracle.graal.nodes.HeapAccess.WriteBarrierType;
+import com.oracle.graal.nodes.HeapAccess.BarrierType;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.*;
@@ -38,6 +38,7 @@ import com.oracle.graal.nodes.util.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.util.*;
 import com.oracle.graal.word.*;
+import com.oracle.graal.word.Word.Opcode;
 import com.oracle.graal.word.Word.Operation;
 
 /**
@@ -69,15 +70,20 @@ public class WordTypeRewriterPhase extends Phase {
     @Override
     protected void run(StructuredGraph graph) {
         for (Node n : GraphOrder.forwardGraph(graph)) {
-            if (n instanceof ValueNode) {
+            if (n instanceof ValueNode && !(n instanceof PhiNode && ((PhiNode) n).isLoopPhi())) {
                 ValueNode valueNode = (ValueNode) n;
                 if (isWord(valueNode)) {
                     changeToWord(valueNode);
                 }
             }
         }
+        for (PhiNode phi : graph.getNodes(PhiNode.class)) {
+            if (phi.isLoopPhi() && isWord(phi)) {
+                changeToWord(phi);
+            }
+        }
 
-        // Remove casts between different word types (which are by now no longer have kind Object)
+        // Remove casts between different word types (which by now no longer have kind Object)
         for (CheckCastNode checkCastNode : graph.getNodes().filter(CheckCastNode.class).snapshot()) {
             if (!checkCastNode.isDeleted() && checkCastNode.kind() == wordKind) {
                 checkCastNode.replaceAtUsages(checkCastNode.object());
@@ -89,6 +95,14 @@ public class WordTypeRewriterPhase extends Phase {
         for (UnsafeCastNode unsafeCastNode : graph.getNodes().filter(UnsafeCastNode.class).snapshot()) {
             if (!unsafeCastNode.isDeleted() && unsafeCastNode.object().stamp() == unsafeCastNode.stamp()) {
                 graph.replaceFloating(unsafeCastNode, unsafeCastNode.object());
+            }
+        }
+
+        // Fold constant field reads (e.g. enum constants)
+        for (LoadFieldNode load : graph.getNodes(LoadFieldNode.class).snapshot()) {
+            ConstantNode constant = load.asConstant(metaAccess);
+            if (constant != null) {
+                graph.replaceFixedWithFloating(load, constant);
             }
         }
 
@@ -169,22 +183,19 @@ public class WordTypeRewriterPhase extends Phase {
                         } else {
                             location = makeLocation(graph, arguments.get(1), readKind, arguments.get(2));
                         }
-                        replace(invoke, readOp(graph, arguments.get(0), invoke, location, false));
+                        replace(invoke, readOp(graph, arguments.get(0), invoke, location, BarrierType.NONE, false));
                         break;
                     }
-                    case READ_COMPRESSED: {
-                        assert arguments.size() == 2 || arguments.size() == 3;
+                    case READ_HEAP: {
+                        assert arguments.size() == 4;
                         Kind readKind = asKind(callTargetNode.returnType());
-                        LocationNode location;
-                        if (arguments.size() == 2) {
-                            location = makeLocation(graph, arguments.get(1), readKind, ANY_LOCATION);
-                        } else {
-                            location = makeLocation(graph, arguments.get(1), readKind, arguments.get(2));
-                        }
-                        replace(invoke, readOp(graph, arguments.get(0), invoke, location, true));
+                        LocationNode location = makeLocation(graph, arguments.get(1), readKind, ANY_LOCATION);
+                        BarrierType barrierType = (BarrierType) arguments.get(2).asConstant().asObject();
+                        replace(invoke, readOp(graph, arguments.get(0), invoke, location, barrierType, arguments.get(3).asConstant().asInt() == 0 ? false : true));
                         break;
                     }
-                    case WRITE: {
+                    case WRITE:
+                    case INITIALIZE: {
                         assert arguments.size() == 3 || arguments.size() == 4;
                         Kind writeKind = asKind(targetMethod.getSignature().getParameterType(1, targetMethod.getDeclaringClass()));
                         LocationNode location;
@@ -193,7 +204,7 @@ public class WordTypeRewriterPhase extends Phase {
                         } else {
                             location = makeLocation(graph, arguments.get(1), writeKind, arguments.get(3));
                         }
-                        replace(invoke, writeOp(graph, arguments.get(0), arguments.get(2), invoke, location));
+                        replace(invoke, writeOp(graph, arguments.get(0), arguments.get(2), invoke, location, operation.opcode()));
                         break;
                     }
                     case ZERO:
@@ -321,8 +332,8 @@ public class WordTypeRewriterPhase extends Phase {
         return IndexedLocationNode.create(locationIdentity, readKind, 0, offset, graph, 1);
     }
 
-    private static ValueNode readOp(StructuredGraph graph, ValueNode base, Invoke invoke, LocationNode location, boolean compress) {
-        ReadNode read = graph.add(new ReadNode(base, location, invoke.asNode().stamp(), WriteBarrierType.NONE, compress));
+    private static ValueNode readOp(StructuredGraph graph, ValueNode base, Invoke invoke, LocationNode location, BarrierType barrierType, boolean compressible) {
+        ReadNode read = graph.add(new ReadNode(base, location, invoke.asNode().stamp(), barrierType, compressible));
         graph.addBeforeFixed(invoke.asNode(), read);
         // The read must not float outside its block otherwise it may float above an explicit zero
         // check on its base address
@@ -330,8 +341,9 @@ public class WordTypeRewriterPhase extends Phase {
         return read;
     }
 
-    private static ValueNode writeOp(StructuredGraph graph, ValueNode base, ValueNode value, Invoke invoke, LocationNode location) {
-        WriteNode write = graph.add(new WriteNode(base, value, location, WriteBarrierType.NONE, false));
+    private static ValueNode writeOp(StructuredGraph graph, ValueNode base, ValueNode value, Invoke invoke, LocationNode location, Opcode op) {
+        assert op == Opcode.WRITE || op == Opcode.INITIALIZE;
+        WriteNode write = graph.add(new WriteNode(base, value, location, BarrierType.NONE, false, op == Opcode.INITIALIZE));
         write.setStateAfter(invoke.stateAfter());
         graph.addBeforeFixed(invoke.asNode(), write);
         return write;

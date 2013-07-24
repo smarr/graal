@@ -37,31 +37,35 @@ import com.oracle.truffle.api.nodes.*;
 /**
  * Call target that is optimized by Graal upon surpassing a specific invocation threshold.
  */
-public final class OptimizedCallTarget extends DefaultCallTarget implements LoopCountReceiver, FrameFactory {
+public final class OptimizedCallTarget extends DefaultCallTarget implements FrameFactory, LoopCountReceiver, ReplaceObserver {
 
     private static final PrintStream OUT = TTY.out().out();
+    private static final int MIN_INVOKES_AFTER_INLINING = 2;
 
-    private final int inliningReprofileCount;
-    private final int invalidationReprofileCount;
-
-    protected OptimizedCallTarget(RootNode rootNode, FrameDescriptor descriptor, TruffleCompiler compiler, int compilationThreshold, int inliningReprofileCount, int invalidationReprofileCount) {
+    protected OptimizedCallTarget(RootNode rootNode, FrameDescriptor descriptor, TruffleCompiler compiler, int compilationThreshold) {
         super(rootNode, descriptor);
         this.compiler = compiler;
         this.invokeCounter = compilationThreshold >> 7;
         this.loopAndInvokeCounter = compilationThreshold;
         this.originalInvokeCounter = compilationThreshold;
         this.rootNode.setCallTarget(this);
-        this.inliningReprofileCount = inliningReprofileCount;
-        this.invalidationReprofileCount = invalidationReprofileCount;
+
+        if (TruffleCallTargetProfiling.getValue()) {
+            registerCallTarget(this);
+        }
     }
 
     private InstalledCode compiledMethod;
     private final TruffleCompiler compiler;
+
     private int invokeCounter;
     private int originalInvokeCounter;
     private int loopAndInvokeCounter;
     private boolean disableCompilation;
 
+    private int callCount;
+    private int invalidationCount;
+    private int replaceCount;
     long timeCompilationStarted;
     long timePartialEvaluationFinished;
     long timeCompilationFinished;
@@ -71,6 +75,9 @@ public final class OptimizedCallTarget extends DefaultCallTarget implements Loop
 
     @Override
     public Object call(PackedFrame caller, Arguments args) {
+        if (TruffleCallTargetProfiling.getValue()) {
+            callCount++;
+        }
         if (CompilerDirectives.injectBranchProbability(CompilerDirectives.FASTPATH_PROBABILITY, compiledMethod != null)) {
             try {
                 return compiledMethod.execute(this, caller, args);
@@ -82,50 +89,65 @@ public final class OptimizedCallTarget extends DefaultCallTarget implements Loop
         }
     }
 
-    protected Object compiledCodeInvalidated(PackedFrame caller, Arguments args) {
+    private Object compiledCodeInvalidated(PackedFrame caller, Arguments args) {
+        CompilerAsserts.neverPartOfCompilation();
         compiledMethod = null;
+        int invalidationReprofileCount = TruffleInvalidationReprofileCount.getValue();
         invokeCounter = invalidationReprofileCount;
+        invalidationCount++;
         if (TruffleFunctionInlining.getValue()) {
             originalInvokeCounter += invalidationReprofileCount;
         }
         if (TraceTruffleCompilation.getValue()) {
-            OUT.printf("[truffle] invalidated %-48s |Alive %5.0fms\n", rootNode, (System.nanoTime() - timeCompilationFinished) / 1e6);
+            OUT.printf("[truffle] invalidated %-48s |Alive %5.0fms |Inv# %d                                     |Replace# %d\n", rootNode, (System.nanoTime() - timeCompilationFinished) / 1e6,
+                            invalidationCount, replaceCount);
         }
         return call(caller, args);
     }
 
     private Object interpreterCall(PackedFrame caller, Arguments args) {
+        CompilerAsserts.neverPartOfCompilation();
         invokeCounter--;
         loopAndInvokeCounter--;
         if (disableCompilation || loopAndInvokeCounter > 0 || invokeCounter > 0) {
             return executeHelper(caller, args);
         } else {
-            if (TruffleFunctionInlining.getValue() && inline()) {
-                invokeCounter = 2;
-                loopAndInvokeCounter = inliningReprofileCount;
-                originalInvokeCounter = inliningReprofileCount;
-            } else {
-                compile();
-            }
+            compileOrInline();
             return call(caller, args);
         }
     }
 
+    private void compileOrInline() {
+        if (TruffleFunctionInlining.getValue() && inline()) {
+            invokeCounter = MIN_INVOKES_AFTER_INLINING;
+            int inliningReprofileCount = TruffleInliningReprofileCount.getValue();
+            loopAndInvokeCounter = inliningReprofileCount;
+            originalInvokeCounter = inliningReprofileCount;
+        } else {
+            compile();
+        }
+    }
+
     public boolean inline() {
+        CompilerAsserts.neverPartOfCompilation();
         return new InliningHelper(this).inline();
     }
 
     public void compile() {
+        CompilerAsserts.neverPartOfCompilation();
         try {
             compiledMethod = compiler.compile(this);
             if (compiledMethod == null) {
                 throw new BailoutException(String.format("code installation failed (codeSize=%s)", codeSize));
             } else {
                 if (TraceTruffleCompilation.getValue()) {
-                    int nodeCountTruffle = new InliningHelper.CallTargetProfile(rootNode).nodeCount;
+                    int nodeCountTruffle = NodeUtil.countNodes(rootNode);
                     OUT.printf("[truffle] optimized %-50s |Nodes %7d |Time %5.0f(%4.0f+%-4.0f)ms |Nodes %5d/%5d |CodeSize %d\n", rootNode, nodeCountTruffle,
                                     (timeCompilationFinished - timeCompilationStarted) / 1e6, (timePartialEvaluationFinished - timeCompilationStarted) / 1e6,
                                     (timeCompilationFinished - timePartialEvaluationFinished) / 1e6, nodeCountPartialEval, nodeCountLowered, codeSize);
+                }
+                if (TruffleCallTargetProfiling.getValue()) {
+                    resetProfiling();
                 }
             }
         } catch (Throwable e) {
@@ -161,19 +183,22 @@ public final class OptimizedCallTarget extends DefaultCallTarget implements Loop
     }
 
     @Override
-    public String toString() {
-        return "CallTarget " + rootNode;
-    }
-
-    @Override
     public void reportLoopCount(int count) {
         loopAndInvokeCounter -= count;
     }
 
-    private static class InliningHelper {
+    @Override
+    public void nodeReplaced() {
+        replaceCount++;
 
-        private static final int MAX_SIZE = 300;
-        private static final int MAX_INLINE_SIZE = 62;
+        // delay compilation until tree is deemed stable enough
+        int replaceBackoff = TruffleReplaceReprofileCount.getValue();
+        if (loopAndInvokeCounter < replaceBackoff) {
+            loopAndInvokeCounter = replaceBackoff;
+        }
+    }
+
+    private static class InliningHelper {
 
         private final OptimizedCallTarget target;
 
@@ -182,101 +207,237 @@ public final class OptimizedCallTarget extends DefaultCallTarget implements Loop
         }
 
         public boolean inline() {
-            CallTargetProfile profile = new CallTargetProfile(target.getRootNode());
-
-            if (profile.inlinableCallSites.isEmpty()) {
-                return false;
-            }
-
-            if (profile.nodeCount > MAX_SIZE) {
-                return false;
-            }
-
-            double max = 0.0D;
-            ProfiledInlinableCallSite inliningDecision = null;
-            for (Node callNode : profile.inlinableCallSites) {
-                InlinableCallSite callSite = (InlinableCallSite) callNode;
-                Node inlineTree = callSite.getInlineTree();
-                if (inlineTree == null) {
-                    continue;
-                }
-                CallTargetProfile inlineProfile = new CallTargetProfile(inlineTree);
-                if (inlineProfile.nodeCount > MAX_INLINE_SIZE || inlineProfile.nodeCount + profile.nodeCount > MAX_SIZE) {
-                    continue;
-                }
-
-                ProfiledInlinableCallSite inlinable = new ProfiledInlinableCallSite(inlineProfile, callSite);
-                double metric = (inlinable.callCount / inlineProfile.nodeCount) + ((double) inlinable.callCount / (double) target.originalInvokeCounter);
-                if (metric >= max) {
-                    inliningDecision = inlinable;
-                    max = metric;
-                }
-            }
-
-            for (Node callSite : profile.inlinableCallSites) {
-                ((InlinableCallSite) callSite).resetCallCount();
-            }
-
-            if (inliningDecision != null) {
-                if (inliningDecision.callSite.inline(target)) {
-                    if (TraceTruffleCompilation.getValue()) {
-
-                        String calls = String.format("%4s/%4s", inliningDecision.callCount, target.originalInvokeCounter);
-                        String nodes = String.format("%3s/%3s", inliningDecision.profile.nodeCount, profile.nodeCount);
-
-                        OUT.printf("[truffle] inlined   %-50s |Nodes %6s |Calls %6s         |into %s\n", inliningDecision.callSite, nodes, calls, target.getRootNode());
+            final InliningPolicy policy = new InliningPolicy(target);
+            if (!policy.continueInlining()) {
+                if (TraceTruffleInliningDetails.getValue()) {
+                    List<InlinableCallSiteInfo> inlinableCallSites = getInlinableCallSites(target);
+                    if (!inlinableCallSites.isEmpty()) {
+                        OUT.printf("[truffle] inlining hit caller size limit (%3d >= %3d).%3d remaining call sites in %s:\n", policy.callerNodeCount, TruffleInliningMaxCallerSize.getValue(),
+                                        inlinableCallSites.size(), target.getRootNode());
+                        policy.sortByRelevance(inlinableCallSites);
+                        printCallSiteInfo(policy, inlinableCallSites, "");
                     }
-                    return true;
+                }
+                return false;
+            }
+
+            List<InlinableCallSiteInfo> inlinableCallSites = getInlinableCallSites(target);
+            if (inlinableCallSites.isEmpty()) {
+                return false;
+            }
+
+            policy.sortByRelevance(inlinableCallSites);
+
+            boolean inlined = false;
+            for (InlinableCallSiteInfo inlinableCallSite : inlinableCallSites) {
+                if (!policy.isWorthInlining(inlinableCallSite)) {
+                    break;
+                }
+                if (inlinableCallSite.getCallSite().inline(target)) {
+                    if (TraceTruffleInlining.getValue()) {
+                        printCallSiteInfo(policy, inlinableCallSite, "inlined");
+                    }
+                    inlined = true;
+                    break;
                 }
             }
-            return false;
+
+            if (inlined) {
+                for (InlinableCallSiteInfo callSite : inlinableCallSites) {
+                    callSite.getCallSite().resetCallCount();
+                }
+            } else {
+                if (TraceTruffleInliningDetails.getValue()) {
+                    OUT.printf("[truffle] inlining stopped.%3d remaining call sites in %s:\n", inlinableCallSites.size(), target.getRootNode());
+                    printCallSiteInfo(policy, inlinableCallSites, "");
+                }
+            }
+
+            return inlined;
         }
 
-        private static class ProfiledInlinableCallSite {
+        private static void printCallSiteInfo(InliningPolicy policy, List<InlinableCallSiteInfo> inlinableCallSites, String msg) {
+            for (InlinableCallSiteInfo candidate : inlinableCallSites) {
+                printCallSiteInfo(policy, candidate, msg);
+            }
+        }
 
-            final CallTargetProfile profile;
-            final InlinableCallSite callSite;
-            final int callCount;
+        private static void printCallSiteInfo(InliningPolicy policy, InlinableCallSiteInfo callSite, String msg) {
+            String calls = String.format("%4s/%4s", callSite.getCallCount(), policy.callerInvocationCount);
+            String nodes = String.format("%3s/%3s", callSite.getInlineNodeCount(), policy.callerNodeCount);
+            OUT.printf("[truffle] %-9s %-50s |Nodes %6s |Calls %6s %7.3f |%s\n", msg, callSite.getCallSite(), nodes, calls, policy.metric(callSite), callSite.getCallSite().getCallTarget());
+        }
 
-            public ProfiledInlinableCallSite(CallTargetProfile profile, InlinableCallSite callSite) {
-                this.profile = profile;
+        private static final class InliningPolicy {
+
+            private final int callerNodeCount;
+            private final int callerInvocationCount;
+
+            public InliningPolicy(OptimizedCallTarget caller) {
+                this.callerNodeCount = NodeUtil.countNodes(caller.getRootNode());
+                this.callerInvocationCount = caller.originalInvokeCounter;
+            }
+
+            public boolean continueInlining() {
+                return callerNodeCount < TruffleInliningMaxCallerSize.getValue();
+            }
+
+            public boolean isWorthInlining(InlinableCallSiteInfo callSite) {
+                return callSite.getInlineNodeCount() <= TruffleInliningMaxCalleeSize.getValue() && callSite.getInlineNodeCount() + callerNodeCount <= TruffleInliningMaxCallerSize.getValue() &&
+                                callSite.getCallCount() > 0 && callSite.getRecursiveDepth() < TruffleInliningMaxRecursiveDepth.getValue() &&
+                                (frequency(callSite) >= TruffleInliningMinFrequency.getValue() || callSite.getInlineNodeCount() <= TruffleInliningTrivialSize.getValue());
+            }
+
+            public double metric(InlinableCallSiteInfo callSite) {
+                double cost = callSite.getInlineNodeCount();
+                double metric = frequency(callSite) / cost;
+                return metric;
+            }
+
+            private double frequency(InlinableCallSiteInfo callSite) {
+                return (double) callSite.getCallCount() / (double) callerInvocationCount;
+            }
+
+            public void sortByRelevance(List<InlinableCallSiteInfo> inlinableCallSites) {
+                Collections.sort(inlinableCallSites, new Comparator<InlinableCallSiteInfo>() {
+
+                    @Override
+                    public int compare(InlinableCallSiteInfo cs1, InlinableCallSiteInfo cs2) {
+                        int result = (isWorthInlining(cs2) ? 1 : 0) - (isWorthInlining(cs1) ? 1 : 0);
+                        if (result == 0) {
+                            return Double.compare(metric(cs2), metric(cs1));
+                        }
+                        return result;
+                    }
+                });
+            }
+        }
+
+        private static final class InlinableCallSiteInfo {
+
+            private final InlinableCallSite callSite;
+            private final int callCount;
+            private final int nodeCount;
+            private final int recursiveDepth;
+
+            public InlinableCallSiteInfo(InlinableCallSite callSite) {
                 this.callSite = callSite;
                 this.callCount = callSite.getCallCount();
+                this.nodeCount = NodeUtil.countNodes(callSite.getInlineTree());
+                this.recursiveDepth = calculateRecursiveDepth();
+            }
+
+            public int getRecursiveDepth() {
+                return recursiveDepth;
+            }
+
+            private int calculateRecursiveDepth() {
+                int depth = 0;
+                Node parent = ((Node) callSite).getParent();
+                while (!(parent instanceof RootNode)) {
+                    assert parent != null;
+                    if (parent instanceof InlinedCallSite && ((InlinedCallSite) parent).getCallTarget() == callSite.getCallTarget()) {
+                        depth++;
+                    }
+                    parent = parent.getParent();
+                }
+                if (((RootNode) parent).getCallTarget() == callSite.getCallTarget()) {
+                    depth++;
+                }
+                return depth;
+            }
+
+            public InlinableCallSite getCallSite() {
+                return callSite;
+            }
+
+            public int getCallCount() {
+                return callCount;
+            }
+
+            public int getInlineNodeCount() {
+                return nodeCount;
             }
         }
 
-        private static class CallTargetProfile {
-
-            final Node root;
-            final int nodeCount;
-            final List<Node> inlinableCallSites = new ArrayList<>();
-
-            public CallTargetProfile(Node rootNode) {
-                root = rootNode;
-
-                VisitorImpl impl = new VisitorImpl();
-                root.accept(impl);
-
-                this.nodeCount = impl.visitedCount;
-            }
-
-            private class VisitorImpl implements NodeVisitor {
-
-                int visitedCount;
+        private static List<InlinableCallSiteInfo> getInlinableCallSites(final DefaultCallTarget target) {
+            final ArrayList<InlinableCallSiteInfo> inlinableCallSites = new ArrayList<>();
+            target.getRootNode().accept(new NodeVisitor() {
 
                 @Override
                 public boolean visit(Node node) {
-                    if (node instanceof RootNode && visitedCount > 0) {
-                        return false;
-                    }
-
                     if (node instanceof InlinableCallSite) {
-                        inlinableCallSites.add(node);
+                        inlinableCallSites.add(new InlinableCallSiteInfo((InlinableCallSite) node));
                     }
-                    visitedCount++;
                     return true;
                 }
+            });
+            return inlinableCallSites;
+        }
+    }
+
+    private static void resetProfiling() {
+        for (OptimizedCallTarget callTarget : OptimizedCallTarget.callTargets.keySet()) {
+            callTarget.callCount = 0;
+        }
+    }
+
+    private static void printProfiling() {
+        List<OptimizedCallTarget> sortedCallTargets = new ArrayList<>(OptimizedCallTarget.callTargets.keySet());
+        Collections.sort(sortedCallTargets, new Comparator<OptimizedCallTarget>() {
+
+            @Override
+            public int compare(OptimizedCallTarget o1, OptimizedCallTarget o2) {
+                return o2.callCount - o1.callCount;
             }
+        });
+
+        int totalCallCount = 0;
+        int totalInlinedCallSiteCount = 0;
+        int totalNotInlinedCallSiteCount = 0;
+        int totalNodeCount = 0;
+        int totalInvalidationCount = 0;
+
+        OUT.println();
+        OUT.printf("%-50s | %-10s | %s / %s | %s | %s\n", "Call Target", "Call Count", "Calls Sites Inlined", "Not Inlined", "Node Count", "Inv");
+        for (OptimizedCallTarget callTarget : sortedCallTargets) {
+            if (callTarget.callCount == 0) {
+                continue;
+            }
+
+            int notInlinedCallSiteCount = InliningHelper.getInlinableCallSites(callTarget).size();
+            int nodeCount = NodeUtil.countNodes(callTarget.rootNode);
+            int inlinedCallSiteCount = NodeUtil.countNodes(callTarget.rootNode, InlinedCallSite.class);
+            String comment = callTarget.compiledMethod == null ? " int" : "";
+            comment += callTarget.disableCompilation ? " fail" : "";
+            OUT.printf("%-50s | %10d | %15d | %15d | %10d | %3d%s\n", callTarget.getRootNode(), callTarget.callCount, inlinedCallSiteCount, notInlinedCallSiteCount, nodeCount,
+                            callTarget.invalidationCount, comment);
+
+            totalCallCount += callTarget.callCount;
+            totalInlinedCallSiteCount += inlinedCallSiteCount;
+            totalNotInlinedCallSiteCount += notInlinedCallSiteCount;
+            totalNodeCount += nodeCount;
+            totalInvalidationCount += callTarget.invalidationCount;
+        }
+        OUT.printf("%-50s | %10d | %15d | %15d | %10d | %3d\n", "Total", totalCallCount, totalInlinedCallSiteCount, totalNotInlinedCallSiteCount, totalNodeCount, totalInvalidationCount);
+    }
+
+    private static void registerCallTarget(OptimizedCallTarget callTarget) {
+        callTargets.put(callTarget, 0);
+    }
+
+    private static Map<OptimizedCallTarget, Integer> callTargets;
+    static {
+        if (TruffleCallTargetProfiling.getValue()) {
+            callTargets = new WeakHashMap<>();
+
+            Runtime.getRuntime().addShutdownHook(new Thread() {
+
+                @Override
+                public void run() {
+                    printProfiling();
+                }
+            });
         }
     }
 }

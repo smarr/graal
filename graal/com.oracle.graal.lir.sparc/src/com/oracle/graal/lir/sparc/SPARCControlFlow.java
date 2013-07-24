@@ -52,11 +52,29 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
+            // FIXME Using xcc is wrong! It depends on the compare.
             switch (condition) {
+                case EQ:
+                    new Bpe(CC.Xcc, destination.label()).emit(masm);
+                    break;
+                case NE:
+                    new Bpne(CC.Xcc, destination.label()).emit(masm);
+                    break;
+                case BE:
+                    new Bpleu(CC.Xcc, destination.label()).emit(masm);
+                    break;
+                case LE:
+                    new Bple(CC.Xcc, destination.label()).emit(masm);
+                    break;
+                case AE:
+                    new Bpgeu(CC.Xcc, destination.label()).emit(masm);
+                    break;
                 case GT:
-                    // FIXME xcc is wrong! It depends on the compare.
                     new Bpg(CC.Xcc, destination.label()).emit(masm);
+                    break;
+                case AT:
+                    new Bpgu(CC.Xcc, destination.label()).emit(masm);
                     break;
                 default:
                     throw GraalInternalError.shouldNotReachHere();
@@ -93,7 +111,7 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             cmove(tasm, masm, result, false, condition, false, trueValue, falseValue);
         }
     }
@@ -116,12 +134,12 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             cmove(tasm, masm, result, true, condition, unorderedIsTrue, trueValue, falseValue);
         }
     }
 
-    private static void cmove(TargetMethodAssembler tasm, SPARCAssembler masm, Value result, boolean isFloat, ConditionFlag condition, boolean unorderedIsTrue, Value trueValue, Value falseValue) {
+    private static void cmove(TargetMethodAssembler tasm, SPARCMacroAssembler masm, Value result, boolean isFloat, ConditionFlag condition, boolean unorderedIsTrue, Value trueValue, Value falseValue) {
         // check that we don't overwrite an input operand before it is used.
         assert !result.equals(trueValue);
 
@@ -137,7 +155,7 @@ public class SPARCControlFlow {
         }
     }
 
-    private static void cmove(TargetMethodAssembler tasm, SPARCAssembler masm, Value result, ConditionFlag cond, Value other) {
+    private static void cmove(TargetMethodAssembler tasm, SPARCMacroAssembler masm, Value result, ConditionFlag cond, Value other) {
         if (!isRegister(other)) {
             SPARCMove.move(tasm, masm, result, other);
             throw new InternalError("result should be scratch");
@@ -213,7 +231,7 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             new Ret().emit(masm);
             // On SPARC we always leave the frame.
             tasm.frameContext.leave(tasm);
@@ -239,7 +257,7 @@ public class SPARCControlFlow {
 
         @Override
         @SuppressWarnings("unused")
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             if (key.getKind() == Kind.Int) {
                 Register intKey = asIntReg(key);
                 for (int i = 0; i < keyConstants.length; i++) {
@@ -309,7 +327,7 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             assert isSorted(lowKeys) && isSorted(highKeys);
 
             Label actualDefaultTarget = defaultTarget == null ? new Label() : defaultTarget.label();
@@ -387,7 +405,7 @@ public class SPARCControlFlow {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, SPARCAssembler masm) {
+        public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
             tableswitch(tasm, masm, lowKey, defaultTarget, targets, asIntReg(index), asLongReg(scratch));
         }
     }

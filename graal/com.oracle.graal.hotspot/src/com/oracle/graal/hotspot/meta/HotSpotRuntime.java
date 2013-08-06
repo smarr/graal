@@ -201,28 +201,36 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
     /**
      * Creates and registers the details for linking a foreign call to a {@link Stub}.
      * 
+     * @param descriptor the signature of the call to the stub
      * @param reexecutable specifies if the stub call can be re-executed without (meaningful) side
      *            effects. Deoptimization will not return to a point before a stub call that cannot
      *            be re-executed.
+     * @param transition specifies if this is a {@linkplain Transition#LEAF leaf} call
      * @param killedLocations the memory locations killed by the stub call
      */
     protected HotSpotForeignCallLinkage registerStubCall(ForeignCallDescriptor descriptor, boolean reexecutable, Transition transition, LocationIdentity... killedLocations) {
-        return register(HotSpotForeignCallLinkage.create(descriptor, 0L, PRESERVES_REGISTERS, JavaCallee, transition, reexecutable, killedLocations));
+        return register(HotSpotForeignCallLinkage.create(descriptor, 0L, PRESERVES_REGISTERS, JavaCall, JavaCallee, transition, reexecutable, killedLocations));
     }
 
     /**
      * Creates and registers the linkage for a foreign call.
      * 
-     * @param reexecutable specifies if the stub call can be re-executed without (meaningful) side
-     *            effects. Deoptimization will not return to a point before a stub call that cannot
-     *            be re-executed.
-     * @param killedLocations the memory locations killed by the stub call
+     * @param descriptor the signature of the foreign call
+     * @param address the address of the code to call
+     * @param outgoingCcType outgoing (caller) calling convention type
+     * @param effect specifies if the call destroys or preserves all registers (apart from
+     *            temporaries which are always destroyed)
+     * @param transition specifies if this is a {@linkplain Transition#LEAF leaf} call
+     * @param reexecutable specifies if the foreign call can be re-executed without (meaningful)
+     *            side effects. Deoptimization will not return to a point before a foreign call that
+     *            cannot be re-executed.
+     * @param killedLocations the memory locations killed by the foreign call
      */
-    protected HotSpotForeignCallLinkage registerForeignCall(ForeignCallDescriptor descriptor, long address, CallingConvention.Type ccType, RegisterEffect effect, Transition transition,
+    protected HotSpotForeignCallLinkage registerForeignCall(ForeignCallDescriptor descriptor, long address, CallingConvention.Type outgoingCcType, RegisterEffect effect, Transition transition,
                     boolean reexecutable, LocationIdentity... killedLocations) {
         Class<?> resultType = descriptor.getResultType();
         assert transition == LEAF || resultType.isPrimitive() || Word.class.isAssignableFrom(resultType) : "non-leaf foreign calls must return objects in thread local storage: " + descriptor;
-        return register(HotSpotForeignCallLinkage.create(descriptor, address, effect, ccType, transition, reexecutable, killedLocations));
+        return register(HotSpotForeignCallLinkage.create(descriptor, address, effect, outgoingCcType, null, transition, reexecutable, killedLocations));
     }
 
     private static void link(Stub stub) {
@@ -230,12 +238,13 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
     }
 
     /**
-     * Creates a {@linkplain ForeignCallStub stub} for a non-leaf foreign call.
+     * Creates a {@linkplain ForeignCallStub stub} for a foreign call.
      * 
-     * @param descriptor the signature of the call to this stub
-     * @param address the address of the code to call
+     * @param descriptor the signature of the call to the stub
+     * @param address the address of the foreign code to call
      * @param prependThread true if the JavaThread value for the current thread is to be prepended
      *            to the arguments for the call to {@code address}
+     * @param transition specifies if this is a {@linkplain Transition#LEAF leaf} call
      * @param reexecutable specifies if the foreign call can be re-executed without (meaningful)
      *            side effects. Deoptimization will not return to a point before a foreign call that
      *            cannot be re-executed.
@@ -302,6 +311,8 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
         linkForeignCall(r, OSR_MIGRATION_END, c.osrMigrationEndAddress, DONT_PREPEND_THREAD, LEAF, NOT_REEXECUTABLE, NO_LOCATIONS);
         linkForeignCall(r, G1WBPRECALL, c.writeBarrierPreAddress, PREPEND_THREAD, LEAF, REEXECUTABLE, NO_LOCATIONS);
         linkForeignCall(r, G1WBPOSTCALL, c.writeBarrierPostAddress, PREPEND_THREAD, LEAF, REEXECUTABLE, NO_LOCATIONS);
+        linkForeignCall(r, VALIDATEOBJECT, c.validateObject, PREPEND_THREAD, LEAF, REEXECUTABLE, NO_LOCATIONS);
+
         if (IntrinsifyObjectMethods.getValue()) {
             r.registerSubstitutions(ObjectSubstitutions.class);
         }
@@ -625,18 +636,20 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
             graph.replaceFixedWithFixed(storeIndexed, memoryWrite);
 
         } else if (n instanceof UnsafeLoadNode) {
-            UnsafeLoadNode load = (UnsafeLoadNode) n;
-            assert load.kind() != Kind.Illegal;
-            boolean compressible = (!load.object().isNullConstant() && load.accessKind() == Kind.Object);
-            if (addReadBarrier(load, tool)) {
-                unsafeLoadSnippets.lower(load, tool);
-            } else {
-                IndexedLocationNode location = IndexedLocationNode.create(ANY_LOCATION, load.accessKind(), load.displacement(), load.offset(), graph, 1);
-                ReadNode memoryRead = graph.add(new ReadNode(load.object(), location, load.stamp(), BarrierType.NONE, compressible));
-                // An unsafe read must not float outside its block otherwise
-                // it may float above an explicit null check on its object.
-                memoryRead.setGuard(AbstractBeginNode.prevBegin(load));
-                graph.replaceFixedWithFixed(load, memoryRead);
+            if (tool.getLoweringType() != LoweringType.BEFORE_GUARDS) {
+                UnsafeLoadNode load = (UnsafeLoadNode) n;
+                assert load.kind() != Kind.Illegal;
+                boolean compressible = (!load.object().isNullConstant() && load.accessKind() == Kind.Object);
+                if (addReadBarrier(load, tool)) {
+                    unsafeLoadSnippets.lower(load, tool);
+                } else {
+                    IndexedLocationNode location = IndexedLocationNode.create(ANY_LOCATION, load.accessKind(), load.displacement(), load.offset(), graph, 1);
+                    ReadNode memoryRead = graph.add(new ReadNode(load.object(), location, load.stamp(), BarrierType.NONE, compressible));
+                    // An unsafe read must not float outside its block otherwise
+                    // it may float above an explicit null check on its object.
+                    memoryRead.setGuard(AbstractBeginNode.prevBegin(load));
+                    graph.replaceFixedWithFixed(load, memoryRead);
+                }
             }
         } else if (n instanceof UnsafeStoreNode) {
             UnsafeStoreNode store = (UnsafeStoreNode) n;
@@ -876,7 +889,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
 
     private static BarrierType getFieldStoreBarrierType(StoreFieldNode storeField) {
         BarrierType barrierType = BarrierType.NONE;
-        if (storeField.field().getKind() == Kind.Object && !storeField.value().objectStamp().alwaysNull()) {
+        if (storeField.field().getKind() == Kind.Object) {
             barrierType = BarrierType.IMPRECISE;
         }
         return barrierType;
@@ -884,7 +897,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
 
     private static BarrierType getArrayStoreBarrierType(StoreIndexedNode store) {
         BarrierType barrierType = BarrierType.NONE;
-        if (store.elementKind() == Kind.Object && !store.value().objectStamp().alwaysNull()) {
+        if (store.elementKind() == Kind.Object) {
             barrierType = BarrierType.PRECISE;
         }
         return barrierType;
@@ -892,12 +905,12 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
 
     private static BarrierType getUnsafeStoreBarrierType(UnsafeStoreNode store) {
         BarrierType barrierType = BarrierType.NONE;
-        if (store.value().kind() == Kind.Object && !store.value().objectStamp().alwaysNull()) {
+        if (store.value().kind() == Kind.Object) {
             ResolvedJavaType type = store.object().objectStamp().type();
-            if (type != null && type.isArray()) {
-                barrierType = BarrierType.PRECISE;
-            } else {
+            if (type != null && !type.isArray()) {
                 barrierType = BarrierType.IMPRECISE;
+            } else {
+                barrierType = BarrierType.PRECISE;
             }
         }
         return barrierType;
@@ -905,12 +918,12 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
 
     private static BarrierType getCompareAndSwapBarrier(CompareAndSwapNode cas) {
         BarrierType barrierType = BarrierType.NONE;
-        if (cas.expected().kind() == Kind.Object && !cas.newValue().objectStamp().alwaysNull()) {
+        if (cas.expected().kind() == Kind.Object) {
             ResolvedJavaType type = cas.object().objectStamp().type();
-            if (type != null && type.isArray()) {
-                barrierType = BarrierType.PRECISE;
-            } else {
+            if (type != null && !type.isArray()) {
                 barrierType = BarrierType.IMPRECISE;
+            } else {
+                barrierType = BarrierType.PRECISE;
             }
         }
         return barrierType;

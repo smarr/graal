@@ -954,6 +954,11 @@ def gate(args):
         t = Task('BootstrapWithGCVerification:product')
         vm(['-XX:+UnlockDiagnosticVMOptions', '-XX:+VerifyBeforeGC', '-XX:+VerifyAfterGC', '-version'])
         tasks.append(t.stop())
+    
+        _vmbuild = 'product'
+        t = Task('BootstrapWithG1GCVerification:product')
+        vm(['-XX:+UnlockDiagnosticVMOptions', '-XX:-UseSerialGC','-XX:+UseG1GC','-XX:+UseNewCode','-XX:+VerifyBeforeGC', '-XX:+VerifyAfterGC', '-version'])
+        tasks.append(t.stop())
 
         _vmbuild = 'product'
         t = Task('BootstrapWithRegisterPressure:product')
@@ -993,6 +998,7 @@ def gate(args):
             t = Task('BuildHotSpotVarieties')
             buildvms(['--vms', 'client,server', '--builds', 'fastdebug,product'])
             buildvms(['--vms', 'server-nograal', '--builds', 'product'])
+            buildvms(['--vms', 'server-nograal', '--builds', 'optimized'])
             tasks.append(t.stop())
 
             for vmbuild in ['product', 'fastdebug']:

@@ -2,7 +2,7 @@
 GIT_REV=`git rev-parse HEAD | cut -c1-8`
 if [ ! -e published/$GIT_REV ] ;
 then
-  ./mx.sh build
+  ./mx.sh --vm server build
   mkdir published/$GIT_REV
   rm published/latest/*
   

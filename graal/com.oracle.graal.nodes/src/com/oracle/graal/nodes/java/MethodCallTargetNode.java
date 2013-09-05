@@ -128,9 +128,9 @@ public class MethodCallTargetNode extends CallTargetNode implements Node.Iterabl
     public ValueNode canonical(CanonicalizerTool tool) {
         if (!isStatic()) {
             ValueNode receiver = receiver();
-            if (receiver != null && receiver.objectStamp().isExactType()) {
+            if (receiver != null && ObjectStamp.isExactType(receiver) && ObjectStamp.typeOrNull(receiver) != null) {
                 if (invokeKind == InvokeKind.Interface || invokeKind == InvokeKind.Virtual) {
-                    ResolvedJavaMethod method = receiver.objectStamp().type().resolveMethod(targetMethod);
+                    ResolvedJavaMethod method = ObjectStamp.typeOrNull(receiver).resolveMethod(targetMethod);
                     if (method != null) {
                         invokeKind = InvokeKind.Special;
                         targetMethod = method;

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -63,6 +65,23 @@ public interface Frame {
      * @param value the new value of the local variable
      */
     void setObject(FrameSlot slot, Object value) throws FrameSlotTypeException;
+
+    /**
+     * Read access to a local variable of type byte.
+     * 
+     * @param slot the slot of the local variable
+     * @return the current value of the local variable
+     */
+    byte getByte(FrameSlot slot) throws FrameSlotTypeException;
+
+    /**
+     * Write access to a local variable of type byte.
+     * 
+     * @param slot the slot of the local variable
+     * @param value the new value of the local variable
+     */
+
+    void setByte(FrameSlot slot, byte value) throws FrameSlotTypeException;
 
     /**
      * Read access to a local variable of type boolean.

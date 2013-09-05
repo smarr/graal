@@ -2203,10 +2203,8 @@ bool Arguments::check_vm_args_consistency() {
 #ifdef GRAAL
   if (UseG1GC) {
       if (IgnoreUnrecognizedVMOptions) {
-        warning("UseG1GC is still experimental in Graal, use SerialGC instead ");
         FLAG_SET_CMDLINE(bool, UseG1GC, true);
       } else {
-        warning("UseG1GC is still experimental in Graal, use SerialGC instead ");
         status = true;
       }
   } else {
@@ -2218,15 +2216,6 @@ bool Arguments::check_vm_args_consistency() {
       warning("forcing ScavengeRootsInCode non-zero because Graal is enabled");
       ScavengeRootsInCode = 1;
   }
-
-  if (UseCRC32Intrinsics) {
-    // For some yet to be determined reason, enabling CRC32 intrinsics causes
-    // a Graal compiled call to 'static java.util.zip.CRC32.update(int crc, int b)'
-    // to crash the VM
-    warning("disabling CRC32 intrinsics because Graal is enabled");
-  }
-  // This prevents the flag being set to true by VM_Version::get_processor_features()
-  FLAG_SET_CMDLINE(bool, UseCRC32Intrinsics, false);
 #endif
 
   // Need to limit the extent of the padding to reasonable size.

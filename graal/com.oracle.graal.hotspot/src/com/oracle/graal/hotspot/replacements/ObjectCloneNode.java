@@ -22,7 +22,7 @@
  */
 package com.oracle.graal.hotspot.replacements;
 
-import static com.oracle.graal.phases.GraalOptions.*;
+import static com.oracle.graal.compiler.GraalCompiler.*;
 
 import java.lang.reflect.*;
 
@@ -52,11 +52,11 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
 
     @Override
     protected StructuredGraph getSnippetGraph(LoweringTool tool) {
-        if (!IntrinsifyObjectClone.getValue()) {
+        if (!shouldIntrinsify(getTargetMethod())) {
             return null;
         }
 
-        ResolvedJavaType type = getObject().objectStamp().type();
+        ResolvedJavaType type = ObjectStamp.typeOrNull(getObject());
         Method method;
         /*
          * The first condition tests if the parameter is an array, the second condition tests if the
@@ -81,13 +81,17 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
         return type != null && metaAccess.lookupJavaType(Cloneable.class).isAssignableFrom(type);
     }
 
-    private static ResolvedJavaType getConcreteType(ObjectStamp stamp, Assumptions assumptions) {
-        if (stamp.isExactType() || stamp.type() == null) {
-            return stamp.type();
+    private static ResolvedJavaType getConcreteType(Stamp stamp, Assumptions assumptions) {
+        if (!(stamp instanceof ObjectStamp)) {
+            return null;
+        }
+        ObjectStamp objectStamp = (ObjectStamp) stamp;
+        if (objectStamp.isExactType() || objectStamp.type() == null) {
+            return objectStamp.type();
         } else {
-            ResolvedJavaType type = stamp.type().findUniqueConcreteSubtype();
+            ResolvedJavaType type = objectStamp.type().findUniqueConcreteSubtype();
             if (type != null) {
-                assumptions.recordConcreteSubtype(stamp.type(), type);
+                assumptions.recordConcreteSubtype(objectStamp.type(), type);
             }
             return type;
         }
@@ -114,7 +118,7 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
             } else {
                 obj = tool.getReplacedValue(getObject());
             }
-            ResolvedJavaType type = getConcreteType(obj.objectStamp(), tool.getAssumptions());
+            ResolvedJavaType type = getConcreteType(obj.stamp(), tool.getAssumptions());
             if (isCloneableType(type, tool.getMetaAccessProvider())) {
                 if (!type.isArray()) {
                     VirtualInstanceNode newVirtual = new VirtualInstanceNode(type);

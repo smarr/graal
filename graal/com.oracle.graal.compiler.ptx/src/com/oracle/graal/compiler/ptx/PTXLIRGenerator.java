@@ -30,38 +30,35 @@ import static com.oracle.graal.lir.ptx.PTXCompare.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
-import com.oracle.graal.asm.NumUtil;
-import com.oracle.graal.compiler.gen.LIRGenerator;
-import com.oracle.graal.compiler.target.LIRGenLowerable;
-import com.oracle.graal.graph.GraalInternalError;
-import com.oracle.graal.lir.FrameMap;
-import com.oracle.graal.lir.LIR;
-import com.oracle.graal.lir.LIRFrameState;
-import com.oracle.graal.lir.LIRInstruction;
-import com.oracle.graal.lir.LIRValueUtil;
-import com.oracle.graal.lir.LabelRef;
+import com.oracle.graal.asm.*;
+import com.oracle.graal.compiler.gen.*;
+import com.oracle.graal.graph.*;
+import com.oracle.graal.lir.*;
 import com.oracle.graal.lir.StandardOp.JumpOp;
-import com.oracle.graal.lir.Variable;
-import com.oracle.graal.lir.ptx.PTXAddressValue;
+import com.oracle.graal.lir.ptx.*;
 import com.oracle.graal.lir.ptx.PTXArithmetic.Op1Stack;
 import com.oracle.graal.lir.ptx.PTXArithmetic.Op2Reg;
 import com.oracle.graal.lir.ptx.PTXArithmetic.Op2Stack;
 import com.oracle.graal.lir.ptx.PTXArithmetic.ShiftOp;
-import com.oracle.graal.lir.ptx.PTXBitManipulationOp;
+import com.oracle.graal.lir.ptx.PTXArithmetic.Unary1Op;
+import com.oracle.graal.lir.ptx.PTXArithmetic.Unary2Op;
 import com.oracle.graal.lir.ptx.PTXCompare.CompareOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.BranchOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.CondMoveOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.FloatCondMoveOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.ReturnOp;
+import com.oracle.graal.lir.ptx.PTXControlFlow.ReturnNoValOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.SequentialSwitchOp;
 import com.oracle.graal.lir.ptx.PTXControlFlow.TableSwitchOp;
-import com.oracle.graal.lir.ptx.PTXMove.LoadOp;
 import com.oracle.graal.lir.ptx.PTXMove.MoveFromRegOp;
 import com.oracle.graal.lir.ptx.PTXMove.MoveToRegOp;
-import com.oracle.graal.lir.ptx.PTXMove.StoreOp;
+import com.oracle.graal.lir.ptx.PTXMemOp.LoadOp;
+import com.oracle.graal.lir.ptx.PTXMemOp.StoreOp;
+import com.oracle.graal.lir.ptx.PTXMemOp.LoadParamOp;
+import com.oracle.graal.lir.ptx.PTXMemOp.LoadReturnAddrOp;
+import com.oracle.graal.lir.ptx.PTXMemOp.StoreReturnValOp;
 import com.oracle.graal.nodes.*;
-import com.oracle.graal.nodes.calc.Condition;
-import com.oracle.graal.nodes.calc.ConvertNode;
+import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.java.*;
 
 /**
@@ -86,15 +83,6 @@ public class PTXLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    protected void emitNode(ValueNode node) {
-        if (node instanceof LIRGenLowerable) {
-            ((LIRGenLowerable) node).generate(this);
-        } else {
-            super.emitNode(node);
-        }
-    }
-
-    @Override
     public boolean canStoreConstant(Constant c) {
         // Operand b must be in the .reg state space.
         return false;
@@ -109,6 +97,42 @@ public class PTXLIRGenerator extends LIRGenerator {
                 return c.isNull();
             default:
                 return true;
+        }
+    }
+
+    protected static AllocatableValue toParamKind(AllocatableValue value) {
+        if (value.getKind().getStackKind() != value.getKind()) {
+            // We only have stack-kinds in the LIR, so convert the operand kind for values from the
+            // calling convention.
+            if (isRegister(value)) {
+                return asRegister(value).asValue(value.getKind().getStackKind());
+            } else if (isStackSlot(value)) {
+                return StackSlot.get(value.getKind().getStackKind(), asStackSlot(value).getRawOffset(), asStackSlot(value).getRawAddFrameSize());
+            } else {
+                throw GraalInternalError.shouldNotReachHere();
+            }
+        }
+        return value;
+    }
+
+    @Override
+    public void emitPrologue() {
+        // Need to emit .param directives based on incoming arguments and return value
+        CallingConvention incomingArguments = cc;
+        int argCount = incomingArguments.getArgumentCount();
+        // Additional argument for return value.
+        Value[] params = new Value[argCount + 1];
+        for (int i = 0; i < argCount; i++) {
+            params[i] = toParamKind(incomingArguments.getArgument(i));
+        }
+        // Add the return value as the last parameter.
+        params[argCount] =  incomingArguments.getReturn();
+
+        append(new PTXParameterOp(params));
+        for (LocalNode local : graph.getNodes(LocalNode.class)) {
+            Value param = params[local.index()];
+            assert param.getKind() == local.kind().getStackKind();
+            setResult(local, emitLoadParam(param.getKind(), param, null));
         }
     }
 
@@ -266,7 +290,8 @@ public class PTXLIRGenerator extends LIRGenerator {
     /**
      * This method emits the compare instruction, and may reorder the operands. It returns true if
      * it did so.
-     * 
+     *
+     *
      * @param a the left operand of the comparison
      * @param b the right operand of the comparison
      * @return true if the left and right operands were switched, false otherwise
@@ -323,6 +348,22 @@ public class PTXLIRGenerator extends LIRGenerator {
                 break;
             case Double:
                 append(new Op1Stack(DNEG, result, input));
+                break;
+            default:
+                throw GraalInternalError.shouldNotReachHere();
+        }
+        return result;
+    }
+
+    @Override
+    public Variable emitNot(Value input) {
+        Variable result = newVariable(input.getKind());
+        switch (input.getKind()) {
+            case Int:
+                append(new Op1Stack(INOT, result, input));
+                break;
+            case Long:
+                append(new Op1Stack(LNOT, result, input));
                 break;
             default:
                 throw GraalInternalError.shouldNotReachHere();
@@ -666,32 +707,32 @@ public class PTXLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public void emitMathAbs(Variable result, Variable input) {
+    public Value emitMathAbs(Value input) {
         throw new InternalError("NYI");
     }
 
     @Override
-    public void emitMathSqrt(Variable result, Variable input) {
+    public Value emitMathSqrt(Value input) {
         throw new InternalError("NYI");
     }
 
     @Override
-    public void emitMathLog(Variable result, Variable input, boolean base10) {
+    public Value emitMathLog(Value input, boolean base10) {
         throw new InternalError("NYI");
     }
 
     @Override
-    public void emitMathCos(Variable result, Variable input) {
+    public Value emitMathCos(Value input) {
         throw new InternalError("NYI");
     }
 
     @Override
-    public void emitMathSin(Variable result, Variable input) {
+    public Value emitMathSin(Value input) {
         throw new InternalError("NYI");
     }
 
     @Override
-    public void emitMathTan(Variable result, Variable input) {
+    public Value emitMathTan(Value input) {
         throw new InternalError("NYI");
     }
 
@@ -703,6 +744,10 @@ public class PTXLIRGenerator extends LIRGenerator {
     @Override
     protected void emitReturn(Value input) {
         append(new ReturnOp(input));
+    }
+
+    private void emitReturnNoVal() {
+        append(new ReturnNoValOp());
     }
 
     @Override
@@ -760,5 +805,39 @@ public class PTXLIRGenerator extends LIRGenerator {
     @Override
     public void visitInfopointNode(InfopointNode i) {
         throw new InternalError("NYI");
+    }
+
+    public Variable emitLoadParam(Kind kind, Value address, DeoptimizingNode deopting) {
+        PTXAddressValue loadAddress = asAddress(address);
+        Variable result = newVariable(kind);
+        append(new LoadParamOp(kind, result, loadAddress, deopting != null ? state(deopting) : null));
+        return result;
+    }
+
+    public Variable emitLoadReturnAddress(Kind kind, Value address, DeoptimizingNode deopting) {
+        PTXAddressValue loadAddress = asAddress(address);
+        Variable result = newVariable(kind);
+        append(new LoadReturnAddrOp(kind, result, loadAddress, deopting != null ? state(deopting) : null));
+        return result;
+    }
+
+    public void emitStoreReturnValue(Kind kind, Value address, Value inputVal, DeoptimizingNode deopting) {
+        PTXAddressValue storeAddress = asAddress(address);
+        Variable input = load(inputVal);
+        append(new StoreReturnValOp(kind, storeAddress, input, deopting != null ? state(deopting) : null));
+    }
+
+
+    @Override
+    public void visitReturn(ReturnNode x) {
+        AllocatableValue operand = Value.ILLEGAL;
+        if (x.result() != null) {
+            operand = resultOperandFor(x.result().kind());
+            // Load the global memory address from return parameter
+            Variable loadVar = emitLoadReturnAddress(operand.getKind(), operand, null);
+            // Store result in global memory whose location is loadVar
+            emitStoreReturnValue(operand.getKind(), loadVar, operand(x.result()), null);
+        }
+        emitReturnNoVal();
     }
 }

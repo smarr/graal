@@ -100,7 +100,7 @@ public class PartialEvaluationTest extends GraalCompilerTest {
             compilable.call(null, arguments);
         } while (compilable.inline());
 
-        StructuredGraph graph = Debug.scope("Truffle", new DebugDumpScope("Truffle: " + compilable), new Callable<StructuredGraph>() {
+        StructuredGraph graph = Debug.scope("TruffleCompilation", new DebugDumpScope("TruffleCompilation: " + compilable), new Callable<StructuredGraph>() {
 
             @Override
             public StructuredGraph call() {
@@ -131,7 +131,7 @@ public class PartialEvaluationTest extends GraalCompilerTest {
                 }
 
                 new DeadCodeEliminationPhase().apply(resultGraph);
-                new PartialEscapePhase(true, canonicalizer).apply(resultGraph, context);
+                new PartialEscapePhase(true).apply(resultGraph, context);
 
                 if (TruffleInlinePrinter.getValue()) {
                     InlinePrinterProcessor.printTree();

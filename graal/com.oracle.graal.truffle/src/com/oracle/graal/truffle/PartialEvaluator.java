@@ -47,8 +47,9 @@ import com.oracle.graal.phases.PhasePlan.PhasePosition;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.common.CanonicalizerPhase.CustomCanonicalizer;
 import com.oracle.graal.phases.tiers.*;
-import com.oracle.graal.truffle.nodes.*;
-import com.oracle.graal.truffle.nodes.NewFrameNode.VirtualOnlyInstanceNode;
+import com.oracle.graal.truffle.nodes.asserts.*;
+import com.oracle.graal.truffle.nodes.frame.*;
+import com.oracle.graal.truffle.nodes.frame.NewFrameNode.VirtualOnlyInstanceNode;
 import com.oracle.graal.truffle.phases.*;
 import com.oracle.graal.truffle.printer.*;
 import com.oracle.graal.truffle.printer.method.*;
@@ -177,7 +178,7 @@ public class PartialEvaluator {
 
                 // EA frame and clean up.
                 new VerifyFrameDoesNotEscapePhase().apply(graph, false);
-                new PartialEscapePhase(false, new CanonicalizerPhase(!AOTCompilation.getValue())).apply(graph, context);
+                new PartialEscapePhase(false).apply(graph, context);
                 new VerifyNoIntrinsicsLeftPhase().apply(graph, false);
                 for (MaterializeFrameNode materializeNode : graph.getNodes(MaterializeFrameNode.class).snapshot()) {
                     materializeNode.replaceAtUsages(materializeNode.getFrame());

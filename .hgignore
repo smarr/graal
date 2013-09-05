@@ -75,3 +75,5 @@ rebuild-launch.out
 coverage
 jacoco.exec
 workingsets.xml
+.buildbot/
+graal.options

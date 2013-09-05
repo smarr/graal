@@ -31,7 +31,7 @@ import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.nodes.util.*;
 
 @NodeInfo(nameTemplate = "FixedGuard(!={p#negated}) {p#reason/s}")
-public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implements Simplifiable, Lowerable, Node.IterableNodeType, Negatable, GuardingNode {
+public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implements Simplifiable, Lowerable, Node.IterableNodeType, GuardingNode {
 
     @Input private LogicNode condition;
     private final DeoptimizationReason reason;
@@ -82,6 +82,12 @@ public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implemen
 
     @Override
     public void simplify(SimplifierTool tool) {
+        if (condition instanceof LogicNegationNode) {
+            LogicNegationNode negation = (LogicNegationNode) condition;
+            setCondition(negation.getInput());
+            negated = !negated;
+        }
+
         if (condition instanceof LogicConstantNode) {
             LogicConstantNode c = (LogicConstantNode) condition;
             if (c.getValue() == negated) {
@@ -109,21 +115,18 @@ public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implemen
             DeoptimizeNode deopt = graph().add(new DeoptimizeNode(action, reason));
             deopt.setDeoptimizationState(getDeoptimizationState());
             IfNode ifNode;
+            AbstractBeginNode noDeoptSuccessor;
             if (negated) {
                 ifNode = graph().add(new IfNode(condition, deopt, next, 0));
+                noDeoptSuccessor = ifNode.falseSuccessor();
             } else {
                 ifNode = graph().add(new IfNode(condition, next, deopt, 1));
+                noDeoptSuccessor = ifNode.trueSuccessor();
             }
             ((FixedWithNextNode) predecessor()).setNext(ifNode);
+            this.replaceAtUsages(noDeoptSuccessor);
             GraphUtil.killWithUnusedFloatingInputs(this);
         }
-    }
-
-    @Override
-    public Negatable negate(LogicNode cond) {
-        assert cond == condition();
-        negated = !negated;
-        return this;
     }
 
     @Override

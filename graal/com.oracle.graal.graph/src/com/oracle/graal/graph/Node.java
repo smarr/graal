@@ -26,7 +26,8 @@ import java.lang.annotation.*;
 import java.util.*;
 
 import com.oracle.graal.graph.Graph.NodeChangedListener;
-import com.oracle.graal.graph.NodeClass.*;
+import com.oracle.graal.graph.NodeClass.NodeClassIterator;
+import com.oracle.graal.graph.NodeClass.Position;
 import com.oracle.graal.graph.iterators.*;
 
 /**
@@ -121,12 +122,10 @@ public abstract class Node implements Cloneable, Formattable {
     private NodeUsagesList usages;
     private Node predecessor;
     private int modCount;
-    private final NodeClass nodeClass;
 
     public Node() {
         this.graph = null;
         this.id = INITIAL_ID;
-        nodeClass = NodeClass.get(getClass());
     }
 
     protected int id() {
@@ -241,7 +240,7 @@ public abstract class Node implements Cloneable, Formattable {
     }
 
     public final NodeClass getNodeClass() {
-        return nodeClass;
+        return NodeClass.get(getClass());
     }
 
     private boolean checkReplaceWith(Node other) {

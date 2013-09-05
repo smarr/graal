@@ -36,6 +36,7 @@ import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.Node;
 import com.oracle.graal.java.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
 import com.oracle.graal.nodes.spi.*;
@@ -111,7 +112,7 @@ public final class TruffleCache {
                     optimizeGraph(newGraph, tmpAssumptions);
 
                     PhaseContext context = new PhaseContext(metaAccessProvider, tmpAssumptions, replacements);
-                    PartialEscapePhase partialEscapePhase = new PartialEscapePhase(false, new CanonicalizerPhase(true));
+                    PartialEscapePhase partialEscapePhase = new PartialEscapePhase(false);
                     partialEscapePhase.apply(newGraph, context);
 
                     cache.put(method, newGraph);
@@ -152,7 +153,7 @@ public final class TruffleCache {
         ConditionalEliminationPhase conditionalEliminationPhase = new ConditionalEliminationPhase(metaAccessProvider);
         ConvertDeoptimizeToGuardPhase convertDeoptimizeToGuardPhase = new ConvertDeoptimizeToGuardPhase();
         CanonicalizerPhase canonicalizerPhase = new CanonicalizerPhase(!AOTCompilation.getValue());
-        EarlyReadEliminationPhase readEliminationPhase = new EarlyReadEliminationPhase(canonicalizerPhase);
+        EarlyReadEliminationPhase readEliminationPhase = new EarlyReadEliminationPhase();
 
         int maxNodes = TruffleCompilerOptions.TruffleOperationCacheMaxNodes.getValue();
 
@@ -218,6 +219,8 @@ public final class TruffleCache {
             if (next instanceof InvokeWithExceptionNode) {
                 InvokeWithExceptionNode invokeWithExceptionNode = (InvokeWithExceptionNode) next;
                 next = invokeWithExceptionNode.next();
+            } else if (next instanceof IfNode && isAssertionsEnabledCondition(((IfNode) next).condition())) {
+                next = ((IfNode) next).falseSuccessor();
             } else if (next instanceof ControlSplitNode) {
                 ControlSplitNode controlSplitNode = (ControlSplitNode) next;
                 AbstractBeginNode maxProbNode = null;
@@ -246,6 +249,19 @@ public final class TruffleCache {
         }
     }
 
+    private static boolean isAssertionsEnabledCondition(LogicNode condition) {
+        if (condition instanceof IntegerEqualsNode) {
+            IntegerEqualsNode equalsNode = (IntegerEqualsNode) condition;
+            if (equalsNode.x() instanceof LoadFieldNode && equalsNode.y().isConstant()) {
+                LoadFieldNode loadFieldNode = (LoadFieldNode) equalsNode.x();
+                if (loadFieldNode.isStatic() && loadFieldNode.field().getName().equals("$assertionsDisabled") && loadFieldNode.field().isSynthetic()) {
+                    return ((ConstantNode) equalsNode.y()).value.equals(Constant.INT_0);
+                }
+            }
+        }
+        return false;
+    }
+
     private FixedNode expandInvoke(Invoke invoke) {
         if (invoke.callTarget() instanceof MethodCallTargetNode) {
             final MethodCallTargetNode methodCallTargetNode = (MethodCallTargetNode) invoke.callTarget();
@@ -267,9 +283,6 @@ public final class TruffleCache {
                             return inlineGraph;
                         }
                     });
-                    if (!methodCallTargetNode.isStatic() && methodCallTargetNode.receiver().objectStamp().alwaysNull()) {
-                        return invoke.next();
-                    }
                     FixedNode fixedNode = (FixedNode) invoke.predecessor();
                     InliningUtil.inline(invoke, inlinedGraph, true);
                     return fixedNode;

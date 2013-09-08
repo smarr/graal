@@ -332,7 +332,7 @@ public class NodeParser extends TemplateParser<NodeData> {
         nodeData.setNodeContainer(nodeContainer != null);
         nodeData.setTypeSystem(typeSystem);
         nodeData.setFields(parseFields(typeHierarchy, elements));
-        nodeData.setChildren(parseChildren(elements, typeHierarchy));
+        nodeData.setChildren(parseChildren(nodeData, elements, typeHierarchy));
         nodeData.setExecutableTypes(groupExecutableTypes(new ExecutableTypeMethodParser(context, nodeData).parse(elements)));
 
         // resolveChildren invokes cyclic parsing.
@@ -396,16 +396,18 @@ public class NodeParser extends TemplateParser<NodeData> {
                 nodeChild.addError("The @%s of the node and the @%s of the @%s does not match. %s != %s. ", TypeSystem.class.getSimpleName(), TypeSystem.class.getSimpleName(),
                                 NodeChild.class.getSimpleName(), Utils.getSimpleName(node.getTypeSystem().getTemplateType()), Utils.getSimpleName(fieldNodeData.getTypeSystem().getTemplateType()));
             }
-            List<ExecutableTypeData> types = nodeChild.findGenericExecutableTypes(context);
-            if (types.isEmpty()) {
-                AnnotationValue executeWithValue = Utils.getAnnotationValue(nodeChild.getMessageAnnotation(), "executeWith");
-                nodeChild.addError(executeWithValue, "No generic execute method found with %s evaluated arguments for node type %s.", nodeChild.getExecuteWith().size(),
-                                Utils.getSimpleName(nodeChild.getNodeType()));
+            if (fieldNodeData != null) {
+                List<ExecutableTypeData> types = nodeChild.findGenericExecutableTypes(context);
+                if (types.isEmpty()) {
+                    AnnotationValue executeWithValue = Utils.getAnnotationValue(nodeChild.getMessageAnnotation(), "executeWith");
+                    nodeChild.addError(executeWithValue, "No generic execute method found with %s evaluated arguments for node type %s.", nodeChild.getExecuteWith().size(),
+                                    Utils.getSimpleName(nodeChild.getNodeType()));
+                }
             }
         }
     }
 
-    private List<NodeChildData> parseChildren(List<? extends Element> elements, final List<TypeElement> typeHierarchy) {
+    private List<NodeChildData> parseChildren(NodeData parent, List<? extends Element> elements, final List<TypeElement> typeHierarchy) {
         Set<String> shortCircuits = new HashSet<>();
         for (ExecutableElement method : ElementFilter.methodsIn(elements)) {
             AnnotationMirror mirror = Utils.findAnnotationMirror(processingEnv, method, ShortCircuit.class);
@@ -470,7 +472,7 @@ public class NodeParser extends TemplateParser<NodeData> {
                     kind = ExecutionKind.SHORT_CIRCUIT;
                 }
 
-                NodeChildData nodeChild = new NodeChildData(type, childMirror, name, childType, originalChildType, getter, cardinality, kind);
+                NodeChildData nodeChild = new NodeChildData(parent, type, childMirror, name, childType, originalChildType, getter, cardinality, kind);
 
                 parsedChildren.add(nodeChild);
 

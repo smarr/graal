@@ -137,6 +137,10 @@ public final class OrganizedImports {
     private String createDeclaredTypeName(Element enclosedElement, DeclaredType type) {
         String name = type.asElement().getSimpleName().toString();
 
+        if ("Object".equals(name)) {
+            return getQualifiedName(type);
+        }
+
         if (needsImport(enclosedElement, type)) {
             TypeMirror usedByType = simpleNamesUsed.get(name);
             if (usedByType == null) {

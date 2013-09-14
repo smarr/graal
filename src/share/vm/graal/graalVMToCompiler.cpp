@@ -24,6 +24,7 @@
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "graal/graalVMToCompiler.hpp"
+#include "runtime/gpu.hpp"
 
 // this is a *global* handle
 jobject VMToCompiler::_graalRuntimePermObject = NULL;
@@ -60,7 +61,18 @@ Handle VMToCompiler::truffleRuntime() {
 Handle VMToCompiler::graalRuntime() {
   if (JNIHandles::resolve(_graalRuntimePermObject) == NULL) {
 #ifdef AMD64
-    Symbol* name = vmSymbols::com_oracle_graal_hotspot_amd64_AMD64HotSpotGraalRuntime();
+    Symbol* name = NULL;
+    if (UseGPU) {
+      // Set name to PTXHotSpotRuntime if nVidia GPU was detected.
+      if ((gpu::get_target_il_type() == gpu::PTX) &&
+          gpu::is_available() && gpu::has_gpu_linkage()) {
+        name = vmSymbols::com_oracle_graal_hotspot_ptx_PTXHotSpotGraalRuntime();
+      }
+      // Set name to corresponding runtime classname for other
+      // supported GPU runtimes, here.
+    } else {
+      name = vmSymbols::com_oracle_graal_hotspot_amd64_AMD64HotSpotGraalRuntime();
+    }
 #endif
 #ifdef SPARC
     Symbol* name = vmSymbols::com_oracle_graal_hotspot_sparc_SPARCHotSpotGraalRuntime();
@@ -107,11 +119,13 @@ jboolean VMToCompiler::setOption(Handle option) {
   return result.get_jboolean();
 }
 
-void VMToCompiler::finalizeOptions() {
+void VMToCompiler::finalizeOptions(jboolean ciTime) {
   KlassHandle optionsKlass = loadClass(vmSymbols::com_oracle_graal_hotspot_HotSpotOptions());
   Thread* THREAD = Thread::current();
   JavaValue result(T_VOID);
-  JavaCalls::call_static(&result, optionsKlass, vmSymbols::finalizeOptions_name(), vmSymbols::void_method_signature(), THREAD);
+  JavaCallArguments args;
+  args.push_int(ciTime);
+  JavaCalls::call_static(&result, optionsKlass, vmSymbols::finalizeOptions_name(), vmSymbols::bool_void_signature(), &args, THREAD);
   check_pending_exception("Error while calling finalizeOptions");
 }
 

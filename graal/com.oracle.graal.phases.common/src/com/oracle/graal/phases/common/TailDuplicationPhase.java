@@ -260,11 +260,11 @@ public class TailDuplicationPhase extends BasePhase<PhaseContext> {
             for (final AbstractEndNode forwardEnd : merge.forwardEnds()) {
                 Map<Node, Node> duplicates;
                 if (replacements == null || replacements.get(endIndex) == null) {
-                    duplicates = graph.addDuplicates(duplicatedNodes, (DuplicationReplacement) null);
+                    duplicates = graph.addDuplicates(duplicatedNodes, graph, duplicatedNodes.size(), (DuplicationReplacement) null);
                 } else {
                     HashMap<Node, Node> replace = new HashMap<>();
                     replace.put(replacements.get(endIndex).object(), replacements.get(endIndex));
-                    duplicates = graph.addDuplicates(duplicatedNodes, replace);
+                    duplicates = graph.addDuplicates(duplicatedNodes, graph, duplicatedNodes.size(), replace);
                 }
                 for (Map.Entry<ValueNode, PhiNode> phi : bottomPhis.entrySet()) {
                     phi.getValue().initializeValueAt(merge.forwardEndIndex(forwardEnd), (ValueNode) duplicates.get(phi.getKey()));
@@ -309,7 +309,7 @@ public class TailDuplicationPhase extends BasePhase<PhaseContext> {
          * @return The new {@link ValueAnchorNode} that was created.
          */
         private ValueAnchorNode addValueAnchor() {
-            ValueAnchorNode anchor = graph.add(new ValueAnchorNode());
+            ValueAnchorNode anchor = graph.add(new ValueAnchorNode(null));
             graph.addAfterFixed(merge, anchor);
             for (Node usage : merge.usages().snapshot()) {
                 if (usage instanceof PhiNode && ((PhiNode) usage).merge() == merge) {
@@ -476,7 +476,7 @@ public class TailDuplicationPhase extends BasePhase<PhaseContext> {
                             // introduce a new phi
                             PhiNode newPhi = bottomPhis.get(node);
                             if (newPhi == null) {
-                                newPhi = graph.add(new PhiNode(node.kind(), newBottomMerge));
+                                newPhi = graph.addWithoutUnique(new PhiNode(node.kind(), newBottomMerge));
                                 bottomPhis.put(node, newPhi);
                                 newPhi.addInput(node);
                             }

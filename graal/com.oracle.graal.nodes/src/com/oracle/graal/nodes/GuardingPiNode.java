@@ -77,13 +77,14 @@ public class GuardingPiNode extends FixedWithNextNode implements Lowerable, Guar
 
     @Override
     public void lower(LoweringTool tool) {
-        if (graph().getGuardsPhase() == StructuredGraph.GuardsStage.FIXED_DEOPTS) {
+        if (graph().getGuardsStage() == StructuredGraph.GuardsStage.FIXED_DEOPTS) {
             throw new GraalInternalError("Cannot create guards in after-guard lowering");
         }
-        FixedGuardNode guard = graph().add(new FixedGuardNode(condition, reason, action, negated));
-        PiNode pi = graph().add(new PiNode(object, stamp(), guard));
+        GuardingNode guard = tool.createGuard(condition, reason, action, negated);
+        ValueAnchorNode anchor = graph().add(new ValueAnchorNode((ValueNode) guard));
+        PiNode pi = graph().unique(new PiNode(object, stamp(), guard));
         replaceAtUsages(pi);
-        graph().replaceFixedWithFixed(this, guard);
+        graph().replaceFixedWithFixed(this, anchor);
     }
 
     @Override

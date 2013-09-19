@@ -238,14 +238,14 @@ public class EscapeAnalysisTest extends GraalCompilerTest {
                 new DeadCodeEliminationPhase().apply(graph);
                 new CanonicalizerPhase(true).apply(graph, context);
                 new PartialEscapePhase(iterativeEscapeAnalysis, new CanonicalizerPhase(true)).apply(graph, context);
-                Assert.assertEquals(1, graph.getNodes(ReturnNode.class).count());
-                ReturnNode returnNode = graph.getNodes(ReturnNode.class).first();
+                Assert.assertEquals(1, graph.getNodes().filter(ReturnNode.class).count());
+                ReturnNode returnNode = graph.getNodes().filter(ReturnNode.class).first();
                 if (expectedConstantResult != null) {
                     Assert.assertTrue(returnNode.result().toString(), returnNode.result().isConstant());
                     Assert.assertEquals(expectedConstantResult, returnNode.result().asConstant());
                 }
                 int newInstanceCount = graph.getNodes().filter(NewInstanceNode.class).count() + graph.getNodes().filter(NewArrayNode.class).count() +
-                                graph.getNodes(CommitAllocationNode.class).count();
+                                graph.getNodes().filter(CommitAllocationNode.class).count();
                 Assert.assertEquals(0, newInstanceCount);
                 return returnNode;
             }

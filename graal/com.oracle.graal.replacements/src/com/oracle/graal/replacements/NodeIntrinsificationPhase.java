@@ -76,7 +76,6 @@ public class NodeIntrinsificationPhase extends Phase {
             assert Modifier.isStatic(target.getModifiers()) : "node intrinsic must be static: " + target;
 
             ResolvedJavaType[] parameterTypes = MetaUtil.resolveJavaTypes(MetaUtil.signatureToTypes(target), declaringClass);
-            ResolvedJavaType returnType = target.getSignature().getReturnType(declaringClass).resolve(declaringClass);
 
             // Prepare the arguments for the reflective constructor call on the node class.
             Constant[] nodeConstructorArguments = prepareArguments(methodCallTargetNode, parameterTypes, target, false);
@@ -86,10 +85,10 @@ public class NodeIntrinsificationPhase extends Phase {
 
             // Create the new node instance.
             ResolvedJavaType c = getNodeClass(target, intrinsic);
-            Node newInstance = createNodeInstance(c, parameterTypes, returnType, intrinsic.setStampFromReturnType(), nodeConstructorArguments);
+            Node newInstance = createNodeInstance(c, parameterTypes, methodCallTargetNode.invoke().asNode().stamp(), intrinsic.setStampFromReturnType(), nodeConstructorArguments);
 
             // Replace the invoke with the new node.
-            methodCallTargetNode.graph().add(newInstance);
+            newInstance = methodCallTargetNode.graph().addOrUnique(newInstance);
             methodCallTargetNode.invoke().intrinsify(newInstance);
 
             // Clean up checkcast instructions inserted by javac if the return type is generic.
@@ -137,7 +136,7 @@ public class NodeIntrinsificationPhase extends Phase {
     /**
      * Converts the arguments of an invoke node to object values suitable for use as the arguments
      * to a reflective invocation of a Java constructor or method.
-     *
+     * 
      * @param folding specifies if the invocation is for handling a {@link Fold} annotation
      * @return the arguments for the reflective invocation or null if an argument of {@code invoke}
      *         that is expected to be constant isn't
@@ -194,7 +193,7 @@ public class NodeIntrinsificationPhase extends Phase {
         return result;
     }
 
-    private Node createNodeInstance(ResolvedJavaType nodeClass, ResolvedJavaType[] parameterTypes, ResolvedJavaType returnType, boolean setStampFromReturnType, Constant[] nodeConstructorArguments) {
+    private Node createNodeInstance(ResolvedJavaType nodeClass, ResolvedJavaType[] parameterTypes, Stamp invokeStamp, boolean setStampFromReturnType, Constant[] nodeConstructorArguments) {
         ResolvedJavaMethod constructor = null;
         Constant[] arguments = null;
 
@@ -218,11 +217,7 @@ public class NodeIntrinsificationPhase extends Phase {
             ValueNode intrinsicNode = (ValueNode) constructor.newInstance(arguments).asObject();
 
             if (setStampFromReturnType) {
-                if (returnType.getKind() == Kind.Object) {
-                    intrinsicNode.setStamp(StampFactory.declared(returnType));
-                } else {
-                    intrinsicNode.setStamp(StampFactory.forKind(returnType.getKind()));
-                }
+                intrinsicNode.setStamp(invokeStamp);
             }
             return intrinsicNode;
         } catch (Exception e) {
@@ -307,7 +302,7 @@ public class NodeIntrinsificationPhase extends Phase {
     private static void checkCheckCastUsage(StructuredGraph graph, Node intrinsifiedNode, Node input, Node usage) {
         if (usage instanceof ValueAnchorNode) {
             ValueAnchorNode valueAnchorNode = (ValueAnchorNode) usage;
-            valueAnchorNode.removeAnchoredNode((ValueNode) input);
+            valueAnchorNode.removeAnchoredNode();
             Debug.log("%s: Removed a ValueAnchor input", Debug.contextSnapshot(JavaMethod.class));
         } else if (usage instanceof UnboxNode) {
             UnboxNode unbox = (UnboxNode) usage;

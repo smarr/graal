@@ -126,7 +126,7 @@ public class PartialEscapeAnalysisTest extends GraalCompilerTest {
 
     @Test
     public void testCache() {
-        testMaterialize("testCacheSnippet", 0.5, 1);
+        testMaterialize("testCacheSnippet", 0.75, 1);
     }
 
     public static class CacheKey {
@@ -173,7 +173,7 @@ public class PartialEscapeAnalysisTest extends GraalCompilerTest {
             NodesToDoubles nodeProbabilities = new ComputeProbabilityClosure(result).apply();
             double probabilitySum = 0;
             int materializeCount = 0;
-            for (CommitAllocationNode materialize : result.getNodes(CommitAllocationNode.class)) {
+            for (CommitAllocationNode materialize : result.getNodes().filter(CommitAllocationNode.class)) {
                 probabilitySum += nodeProbabilities.get(materialize) * materialize.getVirtualObjects().size();
                 materializeCount += materialize.getVirtualObjects().size();
             }

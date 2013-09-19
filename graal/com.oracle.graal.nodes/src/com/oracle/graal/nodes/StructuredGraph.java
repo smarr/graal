@@ -77,7 +77,7 @@ public class StructuredGraph extends Graph {
     private final ResolvedJavaMethod method;
     private final long graphId;
     private final int entryBCI;
-    private GuardsStage guardsPhase = GuardsStage.FLOATING_GUARDS;
+    private GuardsStage guardsStage = GuardsStage.FLOATING_GUARDS;
 
     /**
      * Creates a new Graph containing a single {@link AbstractBeginNode} as the {@link #start()
@@ -178,7 +178,7 @@ public class StructuredGraph extends Graph {
         StructuredGraph copy = new StructuredGraph(newName, newMethod, graphId, entryBCI);
         HashMap<Node, Node> replacements = new HashMap<>();
         replacements.put(start, copy.start);
-        copy.addDuplicates(getNodes(), replacements);
+        copy.addDuplicates(getNodes(), this, this.getNodeCount(), replacements);
         return copy;
     }
 
@@ -417,12 +417,12 @@ public class StructuredGraph extends Graph {
         }
     }
 
-    public GuardsStage getGuardsPhase() {
-        return guardsPhase;
+    public GuardsStage getGuardsStage() {
+        return guardsStage;
     }
 
-    public void setGuardsPhase(GuardsStage guardsPhase) {
-        assert guardsPhase.ordinal() >= this.guardsPhase.ordinal();
-        this.guardsPhase = guardsPhase;
+    public void setGuardsStage(GuardsStage guardsStage) {
+        assert guardsStage.ordinal() >= this.guardsStage.ordinal();
+        this.guardsStage = guardsStage;
     }
 }

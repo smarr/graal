@@ -46,7 +46,6 @@ import com.oracle.graal.replacements.Snippet.ConstantParameter;
 import com.oracle.graal.replacements.Snippet.VarargsParameter;
 import com.oracle.graal.replacements.nodes.*;
 import com.oracle.graal.word.*;
-import com.oracle.graal.word.phases.*;
 
 /**
  * A snippet template is a graph created by parsing a snippet method and then specialized by binding
@@ -352,7 +351,7 @@ public class SnippetTemplate {
 
                         @Override
                         public SnippetTemplate call() throws Exception {
-                            return new SnippetTemplate(runtime, replacements, target, args);
+                            return new SnippetTemplate(runtime, replacements, args);
                         }
                     });
                     templates.put(args.cacheKey, template);
@@ -383,7 +382,7 @@ public class SnippetTemplate {
     /**
      * Creates a snippet template.
      */
-    protected SnippetTemplate(MetaAccessProvider runtime, Replacements replacements, TargetDescription target, Arguments args) {
+    protected SnippetTemplate(MetaAccessProvider runtime, Replacements replacements, Arguments args) {
         StructuredGraph snippetGraph = replacements.getSnippet(args.info.method);
 
         ResolvedJavaMethod method = snippetGraph.method();
@@ -420,14 +419,12 @@ public class SnippetTemplate {
                 placeholders[i] = placeholder;
             }
         }
-        snippetCopy.addDuplicates(snippetGraph.getNodes(), nodeReplacements);
+        snippetCopy.addDuplicates(snippetGraph.getNodes(), snippetGraph, snippetGraph.getNodeCount(), nodeReplacements);
 
         Debug.dump(snippetCopy, "Before specialization");
         if (!nodeReplacements.isEmpty()) {
             // Do deferred intrinsification of node intrinsics
             new NodeIntrinsificationPhase(runtime).apply(snippetCopy);
-            new WordTypeRewriterPhase(runtime, target.wordKind).apply(snippetCopy);
-
             new CanonicalizerPhase(true).apply(snippetCopy, context);
         }
         NodeIntrinsificationVerificationPhase.verify(snippetCopy);
@@ -744,14 +741,12 @@ public class SnippetTemplate {
         try (TimerCloseable a = instantiationTimer.start()) {
             instantiationCounter.increment();
             // Inline the snippet nodes, replacing parameters with the given args in the process
-            String name = snippet.name == null ? "{copy}" : snippet.name + "{copy}";
-            StructuredGraph snippetCopy = new StructuredGraph(name, snippet.method());
             StartNode entryPointNode = snippet.start();
             FixedNode firstCFGNode = entryPointNode.next();
             StructuredGraph replaceeGraph = replacee.graph();
             IdentityHashMap<Node, Node> replacements = bind(replaceeGraph, runtime, args);
-            Map<Node, Node> duplicates = replaceeGraph.addDuplicates(nodes, replacements);
-            Debug.dump(replaceeGraph, "After inlining snippet %s", snippetCopy.method());
+            Map<Node, Node> duplicates = replaceeGraph.addDuplicates(nodes, snippet, snippet.getNodeCount(), replacements);
+            Debug.dump(replaceeGraph, "After inlining snippet %s", snippet.method());
 
             // Re-wire the control flow graph around the replacee
             FixedNode firstCFGNodeDuplicate = (FixedNode) duplicates.get(firstCFGNode);
@@ -791,7 +786,7 @@ public class SnippetTemplate {
             if (returnNode != null) {
                 if (returnNode.result() instanceof LocalNode) {
                     returnValue = (ValueNode) replacements.get(returnNode.result());
-                } else {
+                } else if (returnNode.result() != null) {
                     returnValue = (ValueNode) duplicates.get(returnNode.result());
                 }
                 Node returnDuplicate = duplicates.get(returnNode);
@@ -844,7 +839,7 @@ public class SnippetTemplate {
             FixedNode firstCFGNode = entryPointNode.next();
             StructuredGraph replaceeGraph = replacee.graph();
             IdentityHashMap<Node, Node> replacements = bind(replaceeGraph, runtime, args);
-            Map<Node, Node> duplicates = replaceeGraph.addDuplicates(nodes, replacements);
+            Map<Node, Node> duplicates = replaceeGraph.addDuplicates(nodes, snippet, snippet.getNodeCount(), replacements);
             Debug.dump(replaceeGraph, "After inlining snippet %s", snippetCopy.method());
 
             FixedWithNextNode lastFixedNode = tool.lastFixedNode();

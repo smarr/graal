@@ -104,6 +104,9 @@ public abstract class Node implements Cloneable, Formattable {
         /**
          * Determines if the stamp of the instantiated intrinsic node has its stamp set from the
          * return type of the annotated method.
+         * <p>
+         * When it is set to true, the stamp that is passed in to the constructor of ValueNode is
+         * ignored and can therefore safely be {@code null}.
          */
         boolean setStampFromReturnType() default false;
     }
@@ -235,6 +238,16 @@ public abstract class Node implements Cloneable, Formattable {
             }
             return 2 + indexOfLastNonNull(extraUsages) + 1;
         }
+    }
+
+    int getUsageCountUpperBound() {
+        if (usage0 == null) {
+            return 0;
+        }
+        if (usage1 == null) {
+            return 1;
+        }
+        return 2 + extraUsages.length;
     }
 
     /**
@@ -446,7 +459,7 @@ public abstract class Node implements Cloneable, Formattable {
                 oldSuccessor.predecessor = null;
             }
             if (newSuccessor != null) {
-                assert assertTrue(newSuccessor.predecessor == null, "unexpected non-null predecessor in new successor (%s): %s", newSuccessor, newSuccessor.predecessor);
+                assert assertTrue(newSuccessor.predecessor == null, "unexpected non-null predecessor in new successor (%s): %s, this=%s", newSuccessor, newSuccessor.predecessor, this);
                 newSuccessor.predecessor = this;
             }
         }
@@ -581,15 +594,31 @@ public abstract class Node implements Cloneable, Formattable {
         return newNode;
     }
 
-    public Node clone(Graph into) {
+    static int count = 0;
+
+    public final Node clone(Graph into) {
+        return clone(into, true);
+    }
+
+    final Node clone(Graph into, boolean clearInputsAndSuccessors) {
+        NodeClass nodeClass = getNodeClass();
+        if (nodeClass.valueNumberable() && nodeClass.isLeafNode()) {
+            Node otherNode = into.findNodeInCache(this);
+            if (otherNode != null) {
+                return otherNode;
+            }
+        }
+
         Node newNode = null;
         try {
             newNode = (Node) this.clone();
         } catch (CloneNotSupportedException e) {
             throw new GraalInternalError(e).addContext(this);
         }
-        getNodeClass().clearInputs(newNode);
-        getNodeClass().clearSuccessors(newNode);
+        if (clearInputsAndSuccessors) {
+            nodeClass.clearInputs(newNode);
+            nodeClass.clearSuccessors(newNode);
+        }
         newNode.graph = into;
         newNode.typeCacheNext = null;
         newNode.id = INITIAL_ID;
@@ -598,7 +627,15 @@ public abstract class Node implements Cloneable, Formattable {
         newNode.usage1 = null;
         newNode.extraUsages = NO_NODES;
         newNode.predecessor = null;
+
+        if (nodeClass.valueNumberable() && nodeClass.isLeafNode()) {
+            into.putNodeIntoCache(newNode);
+        }
+        newNode.afterClone(this);
         return newNode;
+    }
+
+    protected void afterClone(@SuppressWarnings("unused") Node other) {
     }
 
     public boolean verify() {
@@ -776,6 +813,7 @@ public abstract class Node implements Cloneable, Formattable {
 
         boolean neighborsAlternate = ((flags & FormattableFlags.LEFT_JUSTIFY) == FormattableFlags.LEFT_JUSTIFY);
         int neighborsFlags = (neighborsAlternate ? FormattableFlags.ALTERNATE | FormattableFlags.LEFT_JUSTIFY : 0);
+        NodeClass nodeClass = getNodeClass();
         if (width > 0) {
             if (this.predecessor != null) {
                 formatter.format(" pred={");
@@ -786,10 +824,10 @@ public abstract class Node implements Cloneable, Formattable {
             NodeClassIterator inputIter = inputs().iterator();
             while (inputIter.hasNext()) {
                 Position position = inputIter.nextPosition();
-                Node input = getNodeClass().get(this, position);
+                Node input = nodeClass.get(this, position);
                 if (input != null) {
                     formatter.format(" ");
-                    formatter.format(getNodeClass().getName(position));
+                    formatter.format(nodeClass.getName(position));
                     formatter.format("={");
                     input.formatTo(formatter, neighborsFlags, width - 1, 0);
                     formatter.format("}");
@@ -814,10 +852,10 @@ public abstract class Node implements Cloneable, Formattable {
             NodeClassIterator succIter = successors().iterator();
             while (succIter.hasNext()) {
                 Position position = succIter.nextPosition();
-                Node successor = getNodeClass().get(this, position);
+                Node successor = nodeClass.get(this, position);
                 if (successor != null) {
                     formatter.format(" ");
-                    formatter.format(getNodeClass().getName(position));
+                    formatter.format(nodeClass.getName(position));
                     formatter.format("={");
                     successor.formatTo(formatter, neighborsFlags, 0, precision - 1);
                     formatter.format("}");

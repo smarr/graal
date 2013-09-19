@@ -28,7 +28,7 @@ import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
 
-public final class TypeCastNode extends FixedWithNextNode implements Lowerable, com.oracle.graal.graph.Node.IterableNodeType, ValueProxy, Virtualizable {
+public final class TypeCastNode extends FixedWithNextNode implements Lowerable, com.oracle.graal.graph.IterableNodeType, ValueProxy, Virtualizable {
 
     @Input private ValueNode receiver;
     @Input private ValueNode object;
@@ -60,7 +60,7 @@ public final class TypeCastNode extends FixedWithNextNode implements Lowerable, 
     }
 
     public void lower(LoweringTool tool) {
-        if (graph().getGuardsPhase() == StructuredGraph.GuardsPhase.FLOATING_GUARDS) {
+        if (graph().getGuardsPhase() == StructuredGraph.GuardsStage.FLOATING_GUARDS) {
             ValueAnchorNode valueAnchorNode = graph().add(new ValueAnchorNode());
             UnsafeCastNode unsafeCast = graph().unique(new UnsafeCastNode(object, this.stamp(), (GuardingNode) valueAnchorNode));
             this.replaceAtUsages(unsafeCast);

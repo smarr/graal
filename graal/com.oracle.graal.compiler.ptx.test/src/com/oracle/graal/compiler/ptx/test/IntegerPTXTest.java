@@ -26,7 +26,6 @@ import org.junit.*;
 
 import java.lang.reflect.Method;
 
-
 public class IntegerPTXTest extends PTXTestBase {
 
     @Test
@@ -295,6 +294,7 @@ public class IntegerPTXTest extends PTXTestBase {
         return a % b;
     }
 
+    @Ignore
     @Test
     public void testIntConversion() {
         Long r1 = (Long) invoke(compile("testI2L"), 8);

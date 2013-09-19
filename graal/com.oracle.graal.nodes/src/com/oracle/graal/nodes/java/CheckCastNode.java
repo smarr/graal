@@ -38,7 +38,7 @@ import com.oracle.graal.nodes.type.*;
 /**
  * Implements a type check against a compile-time known type.
  */
-public final class CheckCastNode extends FixedWithNextNode implements Canonicalizable, Lowerable, Node.IterableNodeType, Virtualizable, ValueProxy {
+public final class CheckCastNode extends FixedWithNextNode implements Canonicalizable, Lowerable, Virtualizable, ValueProxy {
 
     @Input private ValueNode object;
     private final ResolvedJavaType type;
@@ -159,7 +159,7 @@ public final class CheckCastNode extends FixedWithNextNode implements Canonicali
         if (ObjectStamp.isObjectAlwaysNull(object())) {
             return object();
         }
-        if (tool.assumptions().useOptimisticAssumptions()) {
+        if (tool.assumptions() != null && tool.assumptions().useOptimisticAssumptions()) {
             ResolvedJavaType exactType = type.findUniqueConcreteSubtype();
             if (exactType != null && exactType != type) {
                 // Propagate more precise type information to usages of the checkcast.

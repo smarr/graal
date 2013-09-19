@@ -30,7 +30,7 @@ import com.oracle.graal.truffle.*;
  * Intrinsic node for materializing a Truffle frame.
  */
 @NodeInfo(nameTemplate = "MaterializeFrame{p#frame/s}")
-public class MaterializeFrameNode extends FixedWithNextNode implements Node.IterableNodeType {
+public class MaterializeFrameNode extends FixedWithNextNode implements IterableNodeType {
 
     @Input private ValueNode frame;
 

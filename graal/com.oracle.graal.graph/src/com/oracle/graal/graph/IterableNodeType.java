@@ -20,27 +20,13 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.graal.truffle.nodes;
+package com.oracle.graal.graph;
 
-import com.oracle.graal.api.code.*;
-import com.oracle.graal.nodes.*;
-import com.oracle.graal.nodes.spi.*;
-import com.oracle.graal.replacements.nodes.*;
-
-public class BailoutNode extends MacroNode implements Canonicalizable {
-
-    public BailoutNode(Invoke invoke) {
-        super(invoke);
-        assert arguments.size() == 1;
-    }
-
-    @Override
-    public ValueNode canonical(CanonicalizerTool tool) {
-        ValueNode arg = arguments.get(0);
-        String message = "";
-        if (arg.isConstant()) {
-            message = (String) arg.asConstant().asObject();
-        }
-        throw new BailoutException(message);
-    }
+/**
+ * A marker for a node type supporting {@linkplain Graph#getNodes(Class) fast iteration} of its
+ * instances in a graph. The support for fast iteration comes with a memory cost (e.g., extra data
+ * structures {@link Graph}) so only node types for which fast iteration provides a compilation
+ * performance benefit should implement this interface.
+ */
+public interface IterableNodeType {
 }

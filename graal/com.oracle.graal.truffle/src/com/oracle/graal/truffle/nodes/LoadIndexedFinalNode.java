@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,28 +20,47 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.graal.nodes.java;
+package com.oracle.graal.truffle.nodes;
+
+import java.lang.reflect.*;
+
+import sun.misc.*;
 
 import com.oracle.graal.api.meta.*;
-import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
 
 /**
- * The {@code LoadIndexedNode} represents a read from an element of an array.
+ * @see LoadIndexedNode
  */
-public final class LoadIndexedNode extends AccessIndexedNode implements IterableNodeType, Virtualizable {
+public final class LoadIndexedFinalNode extends AccessIndexedNode implements Canonicalizable {
 
     /**
-     * Creates a new LoadIndexedNode.
+     * Creates a new {@link LoadIndexedFinalNode}.
      * 
      * @param array the instruction producing the array
      * @param index the instruction producing the index
      * @param elementKind the element type
      */
-    public LoadIndexedNode(ValueNode array, ValueNode index, Kind elementKind) {
+    public LoadIndexedFinalNode(ValueNode array, ValueNode index, Kind elementKind) {
         super(createStamp(array, elementKind), array, index, elementKind);
+    }
+
+    @Override
+    public ValueNode canonical(CanonicalizerTool tool) {
+        if (array().isConstant() && !array().isNullConstant() && index().isConstant()) {
+            Object array = array().asConstant().asObject();
+            long index = index().asConstant().asLong();
+            if (index >= 0 && index < Array.getLength(array)) {
+                int arrayBaseOffset = Unsafe.getUnsafe().arrayBaseOffset(array.getClass());
+                int arrayIndexScale = Unsafe.getUnsafe().arrayIndexScale(array.getClass());
+                Constant constant = tool.runtime().readUnsafeConstant(elementKind(), array, arrayBaseOffset + index * arrayIndexScale, elementKind() == Kind.Object);
+                return ConstantNode.forConstant(constant, tool.runtime(), graph());
+            }
+        }
+        return this;
     }
 
     private static Stamp createStamp(ValueNode array, Kind kind) {
@@ -59,14 +78,9 @@ public final class LoadIndexedNode extends AccessIndexedNode implements Iterable
     }
 
     @Override
-    public void virtualize(VirtualizerTool tool) {
-        State arrayState = tool.getObjectState(array());
-        if (arrayState != null && arrayState.getState() == EscapeState.Virtual) {
-            ValueNode indexValue = tool.getReplacedValue(index());
-            int index = indexValue.isConstant() ? indexValue.asConstant().asInt() : -1;
-            if (index >= 0 && index < arrayState.getVirtualObject().entryCount()) {
-                tool.replaceWith(arrayState.getEntry(index));
-            }
-        }
+    public void lower(LoweringTool tool) {
+        LoadIndexedNode loadIndexedNode = graph().add(new LoadIndexedNode(array(), index(), elementKind()));
+        graph().replaceFixedWithFixed(this, loadIndexedNode);
+        loadIndexedNode.lower(tool);
     }
 }

@@ -27,7 +27,7 @@ import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
 
-public abstract class WriteBarrier extends FixedWithNextNode implements Lowerable, Node.IterableNodeType {
+public abstract class WriteBarrier extends FixedWithNextNode implements Lowerable, IterableNodeType {
 
     @Input private ValueNode object;
     @Input private LocationNode location;
@@ -54,7 +54,7 @@ public abstract class WriteBarrier extends FixedWithNextNode implements Lowerabl
 
     @Override
     public void lower(LoweringTool generator) {
-        assert graph().getGuardsPhase() == StructuredGraph.GuardsPhase.AFTER_FSA;
+        assert graph().getGuardsPhase() == StructuredGraph.GuardsStage.AFTER_FSA;
         generator.getRuntime().lower(this, generator);
     }
 }

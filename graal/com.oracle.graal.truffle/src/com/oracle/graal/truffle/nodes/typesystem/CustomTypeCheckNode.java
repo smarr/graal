@@ -26,7 +26,7 @@ import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.spi.*;
 
-public final class CustomTypeCheckNode extends LogicNode implements Lowerable, Virtualizable, com.oracle.graal.graph.Node.IterableNodeType {
+public final class CustomTypeCheckNode extends LogicNode implements Lowerable, Virtualizable, com.oracle.graal.graph.IterableNodeType {
 
     @Input private ValueNode condition;
     @Input private ValueNode object;
@@ -51,7 +51,7 @@ public final class CustomTypeCheckNode extends LogicNode implements Lowerable, V
     }
 
     public void lower(LoweringTool tool) {
-        if (graph().getGuardsPhase() == StructuredGraph.GuardsPhase.FLOATING_GUARDS) {
+        if (graph().getGuardsPhase() == StructuredGraph.GuardsStage.FLOATING_GUARDS) {
             this.replaceAtUsages(graph().unique(new IntegerEqualsNode(condition, ConstantNode.forInt(1, graph()))));
             this.safeDelete();
         }

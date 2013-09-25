@@ -20,32 +20,30 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+package com.oracle.graal.asm.ptx;
 
-package com.oracle.graal.lir.ptx;
+/**
+ * Represents the various PTX state spaces.
+ */
+public enum PTXStateSpace {
 
-import static com.oracle.graal.asm.ptx.PTXAssembler.*;
-import static com.oracle.graal.lir.LIRInstruction.OperandFlag.*;
+    Parameter("param"),
 
-import com.oracle.graal.api.meta.*;
-import com.oracle.graal.asm.ptx.*;
-import com.oracle.graal.lir.*;
-import com.oracle.graal.lir.asm.*;
+    Shared("shared"),
 
-public class PTXParameterOp extends LIRInstruction {
+    Local("local"),
 
-    @Def({REG}) protected Value[] params;
+    Global("global"),
 
-    public PTXParameterOp(Value[] params) {
-        this.params = params;
+    Const("const");
+
+    private final String stateName;
+
+    private PTXStateSpace(String name) {
+        this.stateName = name;
     }
 
-    @Override
-    public void emitCode(TargetMethodAssembler tasm) {
-        PTXAssembler masm = (PTXAssembler) tasm.asm;
-        // Emit parameter directives for arguments
-        int argCount = params.length;
-        for (int i = 0; i < argCount; i++) {
-            new Param((Variable) params[i], (i == (argCount - 1))).emit(masm);
-        }
+    public String getStateName() {
+        return stateName;
     }
 }

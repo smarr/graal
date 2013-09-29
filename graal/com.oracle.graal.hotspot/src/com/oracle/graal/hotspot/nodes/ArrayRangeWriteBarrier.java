@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,21 +20,26 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.graal.nodes.spi;
+package com.oracle.graal.hotspot.nodes;
 
 import com.oracle.graal.nodes.*;
 
-/**
- * Interface implemented by nodes that can replace themselves with lower level nodes during a phase
- * that transforms a graph to replace higher level nodes with lower level nodes.
- */
-public interface Lowerable {
+public abstract class ArrayRangeWriteBarrier extends WriteBarrier {
 
-    /**
-     * Expand this node into lower level nodes expressing the same semantics. If the introduced
-     * nodes are themselves lowerable, they should be recursively lowered as part of this call.
-     */
-    void lower(LoweringTool tool);
+    @Input private ValueNode startIndex;
+    @Input private ValueNode length;
 
-    ValueNode asNode();
+    public ArrayRangeWriteBarrier(ValueNode object, ValueNode startIndex, ValueNode length) {
+        super(object, null, null, true);
+        this.startIndex = startIndex;
+        this.length = length;
+    }
+
+    public ValueNode getStartIndex() {
+        return startIndex;
+    }
+
+    public ValueNode getLength() {
+        return length;
+    }
 }

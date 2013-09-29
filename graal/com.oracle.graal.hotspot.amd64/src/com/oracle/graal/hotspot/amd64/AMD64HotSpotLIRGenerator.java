@@ -36,6 +36,7 @@ import com.oracle.graal.asm.*;
 import com.oracle.graal.asm.amd64.AMD64Address.Scale;
 import com.oracle.graal.compiler.amd64.*;
 import com.oracle.graal.compiler.gen.*;
+import com.oracle.graal.debug.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.hotspot.*;
 import com.oracle.graal.hotspot.amd64.AMD64HotSpotMove.CompareAndSwapCompressedOp;
@@ -176,7 +177,7 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
 
     @Override
     protected void emitReturn(Value input) {
-        append(new AMD64HotSpotReturnOp(input));
+        append(new AMD64HotSpotReturnOp(input, getStub() != null));
     }
 
     @Override
@@ -242,7 +243,7 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
         Variable result;
 
         if (linkage.canDeoptimize()) {
-            assert info != null;
+            assert info != null || stub != null;
             append(new AMD64HotSpotCRuntimeCallPrologueOp());
             result = super.emitForeignCall(linkage, info, args);
             append(new AMD64HotSpotCRuntimeCallEpilogueOp());
@@ -287,7 +288,7 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
     @Override
     public void visitSafepointNode(SafepointNode i) {
         LIRFrameState info = state(i);
-        append(new AMD64SafepointOp(info, runtime().config, this));
+        append(new AMD64HotSpotSafepointOp(info, runtime().config, this));
     }
 
     @SuppressWarnings("hiding")
@@ -521,5 +522,14 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
         Variable result = newVariable(node.kind());
         append(new CondMoveOp(result, Condition.EQ, load(Constant.TRUE), Constant.FALSE));
         setResult(node, result);
+    }
+
+    @Override
+    public void visitInfopointNode(InfopointNode i) {
+        if (i.getState() != null && i.getState().bci == FrameState.AFTER_BCI) {
+            Debug.log("Ignoring InfopointNode for AFTER_BCI");
+        } else {
+            super.visitInfopointNode(i);
+        }
     }
 }

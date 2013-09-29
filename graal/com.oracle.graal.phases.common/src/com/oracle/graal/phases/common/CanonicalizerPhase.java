@@ -276,6 +276,8 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
 //                                         --------------------------------------------
 //                          Fixed-connected|   2    |        X        |       6       |
 //                                         --------------------------------------------
+//                              ControlSink|   X    |        X        |       7       |
+//                                         --------------------------------------------
 //       X: must not happen (checked with assertions)
 // @formatter:on
         private boolean performReplacement(final Node node, ValueNode canonical) {
@@ -300,9 +302,16 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
                     assert node instanceof FixedWithNextNode && node.predecessor() != null : node + " -> " + canonical + " : node should be fixed & connected (" + node.predecessor() + ")";
                     FixedWithNextNode fixedWithNext = (FixedWithNextNode) node;
 
-                    // When removing a fixed node, new canonicalization opportunities for its
-// successor
-                    // may arise
+                    if (canonical instanceof ControlSinkNode) {
+                        // case 7
+                        FixedWithNextNode pred = (FixedWithNextNode) node.predecessor();
+                        GraphUtil.killCFG(fixedWithNext);
+                        pred.setNext((FixedNode) canonical);
+                        return true;
+                    }
+
+                    // When removing a fixed node, new canonicalization
+                    // opportunities for its successor may arise
                     assert fixedWithNext.next() != null;
                     tool.addToWorkList(fixedWithNext.next());
 

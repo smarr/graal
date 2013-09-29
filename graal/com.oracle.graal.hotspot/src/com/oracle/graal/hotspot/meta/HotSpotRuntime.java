@@ -49,6 +49,7 @@ import static com.oracle.graal.hotspot.stubs.NewInstanceStub.*;
 import static com.oracle.graal.hotspot.stubs.StubUtil.*;
 import static com.oracle.graal.hotspot.stubs.UnwindExceptionToCallerStub.*;
 import static com.oracle.graal.java.GraphBuilderPhase.RuntimeCalls.*;
+import static com.oracle.graal.nodes.java.ArrayLengthNode.*;
 import static com.oracle.graal.nodes.java.RegisterFinalizerNode.*;
 import static com.oracle.graal.phases.GraalOptions.*;
 import static com.oracle.graal.replacements.Log.*;
@@ -289,7 +290,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
         registerForeignCall(VM_MESSAGE_C, c.vmMessageAddress, NativeCall, DESTROYS_REGISTERS, NOT_LEAF, REEXECUTABLE, NO_LOCATIONS);
 
         link(new NewInstanceStub(this, r, target, registerStubCall(NEW_INSTANCE, REEXECUTABLE, NOT_LEAF, ANY_LOCATION)));
-        link(new NewArrayStub(this, r, target, registerStubCall(NEW_ARRAY, REEXECUTABLE, NOT_LEAF, ANY_LOCATION)));
+        link(new NewArrayStub(this, r, target, registerStubCall(NEW_ARRAY, REEXECUTABLE, NOT_LEAF, INIT_LOCATION)));
         link(new ExceptionHandlerStub(this, r, target, foreignCalls.get(EXCEPTION_HANDLER)));
         link(new UnwindExceptionToCallerStub(this, r, target, registerStubCall(UNWIND_EXCEPTION_TO_CALLER, NOT_REEXECUTABLE, NOT_LEAF, ANY_LOCATION)));
         link(new VerifyOopStub(this, r, target, registerStubCall(VERIFY_OOP, REEXECUTABLE, LEAF, NO_LOCATIONS)));
@@ -300,8 +301,8 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
         linkForeignCall(r, CREATE_OUT_OF_BOUNDS_EXCEPTION, c.createOutOfBoundsExceptionAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, ANY_LOCATION);
         linkForeignCall(r, MONITORENTER, c.monitorenterAddress, PREPEND_THREAD, NOT_LEAF, NOT_REEXECUTABLE, ANY_LOCATION);
         linkForeignCall(r, MONITOREXIT, c.monitorexitAddress, PREPEND_THREAD, NOT_LEAF, NOT_REEXECUTABLE, ANY_LOCATION);
-        linkForeignCall(r, NEW_MULTI_ARRAY, c.newMultiArrayAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, ANY_LOCATION);
-        linkForeignCall(r, DYNAMIC_NEW_ARRAY, c.dynamicNewArrayAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, ANY_LOCATION);
+        linkForeignCall(r, NEW_MULTI_ARRAY, c.newMultiArrayAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, INIT_LOCATION);
+        linkForeignCall(r, DYNAMIC_NEW_ARRAY, c.dynamicNewArrayAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, INIT_LOCATION);
         linkForeignCall(r, LOG_PRINTF, c.logPrintfAddress, PREPEND_THREAD, LEAF, REEXECUTABLE, NO_LOCATIONS);
         linkForeignCall(r, LOG_OBJECT, c.logObjectAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, NO_LOCATIONS);
         linkForeignCall(r, LOG_PRIMITIVE, c.logPrimitiveAddress, PREPEND_THREAD, NOT_LEAF, REEXECUTABLE, NO_LOCATIONS);
@@ -618,7 +619,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
                         value = checkcastNode;
                     }
                 } else {
-                    LoadHubNode arrayClass = graph.unique(new LoadHubNode(array, wordKind, boundsCheck.asNode()));
+                    FloatingReadNode arrayClass = createReadHub(graph, wordKind, array, boundsCheck);
                     LocationNode location = ConstantLocationNode.create(FINAL_LOCATION, wordKind, config.arrayClassElementOffset, graph);
                     /*
                      * Anchor the read of the element klass to the cfg, because it is only valid
@@ -750,6 +751,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
                     for (int lockDepth : commit.getLocks().get(objIndex)) {
                         MonitorEnterNode enter = graph.add(new MonitorEnterNode(allocations[objIndex], lockDepth));
                         graph.addBeforeFixed(commit, enter);
+                        enter.lower(tool);
                     }
                 }
                 for (Node usage : commit.usages().snapshot()) {
@@ -880,7 +882,7 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
     }
 
     private WriteNode createWriteHub(StructuredGraph graph, Kind wordKind, ValueNode object, ValueNode value) {
-        LocationNode location = ConstantLocationNode.create(ANY_LOCATION, wordKind, config.hubOffset, graph);
+        LocationNode location = ConstantLocationNode.create(HUB_LOCATION, wordKind, config.hubOffset, graph);
         assert !object.isConstant() || object.asConstant().isNull();
         return graph.add(new WriteNode(object, value, location, BarrierType.NONE, useCompressedKlassPointers()));
     }
@@ -990,13 +992,19 @@ public abstract class HotSpotRuntime implements GraalCodeCacheProvider, Disassem
         }
     }
 
-    private static GuardingNode createBoundsCheck(AccessIndexedNode n, LoweringTool tool) {
-        StructuredGraph graph = n.graph();
-        ArrayLengthNode arrayLength = graph.add(new ArrayLengthNode(n.array()));
-        GuardingNode guard = tool.createGuard(graph.unique(new IntegerBelowThanNode(n.index(), arrayLength)), BoundsCheckException, InvalidateReprofile);
+    private GuardingNode createBoundsCheck(AccessIndexedNode n, LoweringTool tool) {
+        StructuredGraph g = n.graph();
+        ValueNode array = n.array();
+        ValueNode arrayLength = readArrayLength(array, tool.getRuntime());
+        if (arrayLength == null) {
+            Stamp stamp = StampFactory.positiveInt();
+            ReadNode readArrayLength = g.add(new ReadNode(array, ConstantLocationNode.create(FINAL_LOCATION, Kind.Int, config.arrayLengthOffset, g), stamp, BarrierType.NONE, false));
+            g.addBeforeFixed(n, readArrayLength);
+            tool.createNullCheckGuard(readArrayLength, array);
+            arrayLength = readArrayLength;
+        }
 
-        graph.addBeforeFixed(n, arrayLength);
-        return guard;
+        return tool.createGuard(g.unique(new IntegerBelowThanNode(n.index(), arrayLength)), BoundsCheckException, InvalidateReprofile);
     }
 
     public ResolvedJavaType lookupJavaType(Class<?> clazz) {

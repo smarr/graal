@@ -33,25 +33,21 @@ import com.oracle.graal.compiler.test.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.extended.*;
-import com.oracle.graal.phases.*;
-import com.oracle.graal.phases.common.*;
-import com.oracle.graal.phases.tiers.*;
 import com.oracle.graal.replacements.*;
 import com.oracle.graal.replacements.Snippet.SnippetInliningPolicy;
 import com.oracle.graal.word.*;
-import com.oracle.graal.word.nodes.*;
 
 /**
  * Tests for the {@link Pointer} read and write operations.
  */
-public class PointerTest extends GraalCompilerTest implements Snippets {
+public class ObjectAccessTest extends GraalCompilerTest implements Snippets {
 
     private static final LocationIdentity ID = new NamedLocationIdentity("ID");
     private static final Kind[] KINDS = new Kind[]{Kind.Byte, Kind.Char, Kind.Short, Kind.Int, Kind.Long, Kind.Float, Kind.Double, Kind.Object};
     private final TargetDescription target;
     private final ReplacementsImpl installer;
 
-    public PointerTest() {
+    public ObjectAccessTest() {
         target = Graal.getRequiredCapability(CodeCacheProvider.class).getTarget();
         installer = new ReplacementsImpl(runtime, new Assumptions(false), target);
     }
@@ -106,15 +102,10 @@ public class PointerTest extends GraalCompilerTest implements Snippets {
         }
     }
 
-    private void assertRead(StructuredGraph graph, Kind kind, boolean indexConvert, LocationIdentity locationIdentity) {
-        WordCastNode cast = (WordCastNode) graph.start().next();
-
-        ReadNode read = (ReadNode) cast.next();
+    private static void assertRead(StructuredGraph graph, Kind kind, boolean indexConvert, LocationIdentity locationIdentity) {
+        ReadNode read = (ReadNode) graph.start().next();
         Assert.assertEquals(kind.getStackKind(), read.kind());
-
-        Assert.assertEquals(cast, read.object());
-        Assert.assertEquals(graph.getLocal(0), cast.getInput());
-        Assert.assertEquals(target.wordKind, cast.kind());
+        Assert.assertEquals(graph.getLocal(0), read.object());
 
         IndexedLocationNode location = (IndexedLocationNode) read.location();
         Assert.assertEquals(kind, location.getValueKind());
@@ -133,17 +124,12 @@ public class PointerTest extends GraalCompilerTest implements Snippets {
         Assert.assertEquals(read, ret.result());
     }
 
-    private void assertWrite(StructuredGraph graph, Kind kind, boolean indexConvert, LocationIdentity locationIdentity) {
-        WordCastNode cast = (WordCastNode) graph.start().next();
-
-        WriteNode write = (WriteNode) cast.next();
+    private static void assertWrite(StructuredGraph graph, Kind kind, boolean indexConvert, LocationIdentity locationIdentity) {
+        WriteNode write = (WriteNode) graph.start().next();
         Assert.assertEquals(graph.getLocal(2), write.value());
+        Assert.assertEquals(graph.getLocal(0), write.object());
         Assert.assertEquals(Kind.Void, write.kind());
         Assert.assertEquals(FrameState.AFTER_BCI, write.stateAfter().bci);
-
-        Assert.assertEquals(cast, write.object());
-        Assert.assertEquals(graph.getLocal(0), cast.getInput());
-        Assert.assertEquals(target.wordKind, cast.kind());
 
         IndexedLocationNode location = (IndexedLocationNode) write.location();
         Assert.assertEquals(kind, location.getValueKind());
@@ -164,300 +150,241 @@ public class PointerTest extends GraalCompilerTest implements Snippets {
 
     @Snippet
     public static byte readByte1(Object o, int offset) {
-        return Word.fromObject(o).readByte(offset, ID);
+        return ObjectAccess.readByte(o, offset, ID);
     }
 
     @Snippet
     public static byte readByte2(Object o, int offset) {
-        return Word.fromObject(o).readByte(Word.signed(offset), ID);
+        return ObjectAccess.readByte(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static byte readByte3(Object o, int offset) {
-        return Word.fromObject(o).readByte(offset);
+        return ObjectAccess.readByte(o, offset);
     }
 
     @Snippet
     public static void writeByte1(Object o, int offset, byte value) {
-        Word.fromObject(o).writeByte(offset, value, ID);
+        ObjectAccess.writeByte(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeByte2(Object o, int offset, byte value) {
-        Word.fromObject(o).writeByte(Word.signed(offset), value, ID);
+        ObjectAccess.writeByte(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeByte3(Object o, int offset, byte value) {
-        Word.fromObject(o).writeByte(offset, value);
+        ObjectAccess.writeByte(o, offset, value);
     }
 
     @Snippet
     public static char readChar1(Object o, int offset) {
-        return Word.fromObject(o).readChar(offset, ID);
+        return ObjectAccess.readChar(o, offset, ID);
     }
 
     @Snippet
     public static char readChar2(Object o, int offset) {
-        return Word.fromObject(o).readChar(Word.signed(offset), ID);
+        return ObjectAccess.readChar(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static char readChar3(Object o, int offset) {
-        return Word.fromObject(o).readChar(offset);
+        return ObjectAccess.readChar(o, offset);
     }
 
     @Snippet
     public static void writeChar1(Object o, int offset, char value) {
-        Word.fromObject(o).writeChar(offset, value, ID);
+        ObjectAccess.writeChar(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeChar2(Object o, int offset, char value) {
-        Word.fromObject(o).writeChar(Word.signed(offset), value, ID);
+        ObjectAccess.writeChar(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeChar3(Object o, int offset, char value) {
-        Word.fromObject(o).writeChar(offset, value);
+        ObjectAccess.writeChar(o, offset, value);
     }
 
     @Snippet
     public static short readShort1(Object o, int offset) {
-        return Word.fromObject(o).readShort(offset, ID);
+        return ObjectAccess.readShort(o, offset, ID);
     }
 
     @Snippet
     public static short readShort2(Object o, int offset) {
-        return Word.fromObject(o).readShort(Word.signed(offset), ID);
+        return ObjectAccess.readShort(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static short readShort3(Object o, int offset) {
-        return Word.fromObject(o).readShort(offset);
+        return ObjectAccess.readShort(o, offset);
     }
 
     @Snippet
     public static void writeShort1(Object o, int offset, short value) {
-        Word.fromObject(o).writeShort(offset, value, ID);
+        ObjectAccess.writeShort(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeShort2(Object o, int offset, short value) {
-        Word.fromObject(o).writeShort(Word.signed(offset), value, ID);
+        ObjectAccess.writeShort(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeShort3(Object o, int offset, short value) {
-        Word.fromObject(o).writeShort(offset, value);
+        ObjectAccess.writeShort(o, offset, value);
     }
 
     @Snippet
     public static int readInt1(Object o, int offset) {
-        return Word.fromObject(o).readInt(offset, ID);
+        return ObjectAccess.readInt(o, offset, ID);
     }
 
     @Snippet
     public static int readInt2(Object o, int offset) {
-        return Word.fromObject(o).readInt(Word.signed(offset), ID);
+        return ObjectAccess.readInt(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static int readInt3(Object o, int offset) {
-        return Word.fromObject(o).readInt(offset);
+        return ObjectAccess.readInt(o, offset);
     }
 
     @Snippet
     public static void writeInt1(Object o, int offset, int value) {
-        Word.fromObject(o).writeInt(offset, value, ID);
+        ObjectAccess.writeInt(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeInt2(Object o, int offset, int value) {
-        Word.fromObject(o).writeInt(Word.signed(offset), value, ID);
+        ObjectAccess.writeInt(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeInt3(Object o, int offset, int value) {
-        Word.fromObject(o).writeInt(offset, value);
+        ObjectAccess.writeInt(o, offset, value);
     }
 
     @Snippet
     public static long readLong1(Object o, int offset) {
-        return Word.fromObject(o).readLong(offset, ID);
+        return ObjectAccess.readLong(o, offset, ID);
     }
 
     @Snippet
     public static long readLong2(Object o, int offset) {
-        return Word.fromObject(o).readLong(Word.signed(offset), ID);
+        return ObjectAccess.readLong(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static long readLong3(Object o, int offset) {
-        return Word.fromObject(o).readLong(offset);
+        return ObjectAccess.readLong(o, offset);
     }
 
     @Snippet
     public static void writeLong1(Object o, int offset, long value) {
-        Word.fromObject(o).writeLong(offset, value, ID);
+        ObjectAccess.writeLong(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeLong2(Object o, int offset, long value) {
-        Word.fromObject(o).writeLong(Word.signed(offset), value, ID);
+        ObjectAccess.writeLong(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeLong3(Object o, int offset, long value) {
-        Word.fromObject(o).writeLong(offset, value);
+        ObjectAccess.writeLong(o, offset, value);
     }
 
     @Snippet
     public static float readFloat1(Object o, int offset) {
-        return Word.fromObject(o).readFloat(offset, ID);
+        return ObjectAccess.readFloat(o, offset, ID);
     }
 
     @Snippet
     public static float readFloat2(Object o, int offset) {
-        return Word.fromObject(o).readFloat(Word.signed(offset), ID);
+        return ObjectAccess.readFloat(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static float readFloat3(Object o, int offset) {
-        return Word.fromObject(o).readFloat(offset);
+        return ObjectAccess.readFloat(o, offset);
     }
 
     @Snippet
     public static void writeFloat1(Object o, int offset, float value) {
-        Word.fromObject(o).writeFloat(offset, value, ID);
+        ObjectAccess.writeFloat(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeFloat2(Object o, int offset, float value) {
-        Word.fromObject(o).writeFloat(Word.signed(offset), value, ID);
+        ObjectAccess.writeFloat(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeFloat3(Object o, int offset, float value) {
-        Word.fromObject(o).writeFloat(offset, value);
+        ObjectAccess.writeFloat(o, offset, value);
     }
 
     @Snippet
     public static double readDouble1(Object o, int offset) {
-        return Word.fromObject(o).readDouble(offset, ID);
+        return ObjectAccess.readDouble(o, offset, ID);
     }
 
     @Snippet
     public static double readDouble2(Object o, int offset) {
-        return Word.fromObject(o).readDouble(Word.signed(offset), ID);
+        return ObjectAccess.readDouble(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static double readDouble3(Object o, int offset) {
-        return Word.fromObject(o).readDouble(offset);
+        return ObjectAccess.readDouble(o, offset);
     }
 
     @Snippet
     public static void writeDouble1(Object o, int offset, double value) {
-        Word.fromObject(o).writeDouble(offset, value, ID);
+        ObjectAccess.writeDouble(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeDouble2(Object o, int offset, double value) {
-        Word.fromObject(o).writeDouble(Word.signed(offset), value, ID);
+        ObjectAccess.writeDouble(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeDouble3(Object o, int offset, double value) {
-        Word.fromObject(o).writeDouble(offset, value);
+        ObjectAccess.writeDouble(o, offset, value);
     }
 
     @Snippet
     public static Object readObject1(Object o, int offset) {
-        return Word.fromObject(o).readObject(offset, ID);
+        return ObjectAccess.readObject(o, offset, ID);
     }
 
     @Snippet
     public static Object readObject2(Object o, int offset) {
-        return Word.fromObject(o).readObject(Word.signed(offset), ID);
+        return ObjectAccess.readObject(o, Word.signed(offset), ID);
     }
 
     @Snippet
     public static Object readObject3(Object o, int offset) {
-        return Word.fromObject(o).readObject(offset);
+        return ObjectAccess.readObject(o, offset);
     }
 
     @Snippet
     public static void writeObject1(Object o, int offset, Object value) {
-        Word.fromObject(o).writeObject(offset, value, ID);
+        ObjectAccess.writeObject(o, offset, value, ID);
     }
 
     @Snippet
     public static void writeObject2(Object o, int offset, Object value) {
-        Word.fromObject(o).writeObject(Word.signed(offset), value, ID);
+        ObjectAccess.writeObject(o, Word.signed(offset), value, ID);
     }
 
     @Snippet
     public static void writeObject3(Object o, int offset, Object value) {
-        Word.fromObject(o).writeObject(offset, value);
-    }
-
-    private void assertNumWordCasts(String snippetName, int expectedWordCasts) {
-        Assumptions assumptions = new Assumptions(true);
-        HighTierContext context = new HighTierContext(runtime(), assumptions, replacements, null, null, OptimisticOptimizations.ALL);
-
-        StructuredGraph graph = parse(snippetName);
-        new CanonicalizerPhase(false).apply(graph, context);
-        Assert.assertEquals(expectedWordCasts, graph.getNodes().filter(WordCastNode.class).count());
-    }
-
-    @Test
-    public void testUnusedFromObject() {
-        assertNumWordCasts("unusedFromObject", 0);
-    }
-
-    @Snippet
-    public static void unusedFromObject(Object o) {
-        Word.fromObject(o);
-    }
-
-    @Test
-    public void testUnusedRawValue() {
-        assertNumWordCasts("unusedRawValue", 0);
-    }
-
-    @Snippet
-    public static void unusedRawValue(Object o) {
-        Word.fromObject(o).rawValue();
-    }
-
-    @Test
-    public void testUsedRawValue() {
-        assertNumWordCasts("usedRawValue", 1);
-    }
-
-    @Snippet
-    public static long usedRawValue(Object o) {
-        return Word.fromObject(o).rawValue();
-    }
-
-    @Test
-    public void testUnusedToObject() {
-        assertNumWordCasts("unusedToObject", 0);
-    }
-
-    @Snippet
-    public static void unusedToObject(Word w) {
-        w.toObject();
-    }
-
-    @Test
-    public void testUsedToObject() {
-        assertNumWordCasts("usedToObject", 1);
-    }
-
-    @Snippet
-    public static Object usedToObject(Word w) {
-        return w.toObject();
+        ObjectAccess.writeObject(o, offset, value);
     }
 }

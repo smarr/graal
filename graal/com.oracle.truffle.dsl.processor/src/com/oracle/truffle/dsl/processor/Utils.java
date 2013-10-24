@@ -381,10 +381,6 @@ public class Utils {
     private static String getDeclaredName(DeclaredType element) {
         String simpleName = element.asElement().getSimpleName().toString();
 
-        if ("Object".equals(simpleName)) {
-            return getQualifiedName(element);
-        }
-
         if (element.getTypeArguments().size() == 0) {
             return simpleName;
         }

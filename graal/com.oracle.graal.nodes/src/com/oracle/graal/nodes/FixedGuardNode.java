@@ -22,9 +22,9 @@
  */
 package com.oracle.graal.nodes;
 
-import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
+import com.oracle.graal.graph.spi.*;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
@@ -82,7 +82,7 @@ public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implemen
 
     @Override
     public void simplify(SimplifierTool tool) {
-        if (condition instanceof LogicNegationNode) {
+        while (condition instanceof LogicNegationNode) {
             LogicNegationNode negation = (LogicNegationNode) condition;
             setCondition(negation.getInput());
             negated = !negated;
@@ -99,8 +99,9 @@ public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implemen
                 DeoptimizeNode deopt = graph().add(new DeoptimizeNode(DeoptimizationAction.InvalidateRecompile, reason));
                 deopt.setDeoptimizationState(getDeoptimizationState());
                 setNext(deopt);
+            } else {
+                this.replaceAtUsages(null);
             }
-            this.replaceAtUsages(BeginNode.prevBegin(this));
             graph().removeFixed(this);
         }
     }
@@ -135,10 +136,5 @@ public final class FixedGuardNode extends DeoptimizingFixedWithNextNode implemen
     @Override
     public boolean canDeoptimize() {
         return true;
-    }
-
-    @Override
-    public DeoptimizationReason getDeoptimizationReason() {
-        return reason;
     }
 }

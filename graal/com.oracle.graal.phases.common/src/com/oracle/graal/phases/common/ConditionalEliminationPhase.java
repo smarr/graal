@@ -52,12 +52,12 @@ public class ConditionalEliminationPhase extends Phase {
     private static final DebugMetric metricObjectEqualsRemoved = Debug.metric("ObjectEqualsRemoved");
     private static final DebugMetric metricGuardsRemoved = Debug.metric("GuardsRemoved");
 
-    private final MetaAccessProvider metaAccessProvider;
+    private final MetaAccessProvider metaAccess;
 
     private StructuredGraph graph;
 
-    public ConditionalEliminationPhase(MetaAccessProvider metaAccessProvider) {
-        this.metaAccessProvider = metaAccessProvider;
+    public ConditionalEliminationPhase(MetaAccessProvider metaAccess) {
+        this.metaAccess = metaAccess;
     }
 
     @Override
@@ -318,44 +318,43 @@ public class ConditionalEliminationPhase extends Phase {
                 ShortCircuitOrNode disjunction = (ShortCircuitOrNode) condition;
                 registerCondition(disjunction.isXNegated(), disjunction.getX(), anchor);
                 registerCondition(disjunction.isYNegated(), disjunction.getY(), anchor);
-            } else {
-                state.addCondition(isTrue, condition, anchor);
+            }
+            state.addCondition(isTrue, condition, anchor);
 
-                if (isTrue && condition instanceof InstanceOfNode) {
-                    InstanceOfNode instanceOf = (InstanceOfNode) condition;
-                    ValueNode object = instanceOf.object();
-                    state.addNullness(false, object);
-                    state.addType(instanceOf.type(), object);
-                } else if (condition instanceof IsNullNode) {
-                    IsNullNode nullCheck = (IsNullNode) condition;
-                    state.addNullness(isTrue, nullCheck.object());
-                } else if (condition instanceof ObjectEqualsNode) {
-                    ObjectEqualsNode equals = (ObjectEqualsNode) condition;
-                    ValueNode x = equals.x();
-                    ValueNode y = equals.y();
-                    if (isTrue) {
-                        if (state.isNull(x) && !state.isNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(true, y);
-                        } else if (!state.isNull(x) && state.isNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(true, x);
-                        }
-                        if (state.isNonNull(x) && !state.isNonNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(false, y);
-                        } else if (!state.isNonNull(x) && state.isNonNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(false, x);
-                        }
-                    } else {
-                        if (state.isNull(x) && !state.isNonNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(false, y);
-                        } else if (!state.isNonNull(x) && state.isNull(y)) {
-                            metricObjectEqualsRegistered.increment();
-                            state.addNullness(false, x);
-                        }
+            if (isTrue && condition instanceof InstanceOfNode) {
+                InstanceOfNode instanceOf = (InstanceOfNode) condition;
+                ValueNode object = instanceOf.object();
+                state.addNullness(false, object);
+                state.addType(instanceOf.type(), object);
+            } else if (condition instanceof IsNullNode) {
+                IsNullNode nullCheck = (IsNullNode) condition;
+                state.addNullness(isTrue, nullCheck.object());
+            } else if (condition instanceof ObjectEqualsNode) {
+                ObjectEqualsNode equals = (ObjectEqualsNode) condition;
+                ValueNode x = equals.x();
+                ValueNode y = equals.y();
+                if (isTrue) {
+                    if (state.isNull(x) && !state.isNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(true, y);
+                    } else if (!state.isNull(x) && state.isNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(true, x);
+                    }
+                    if (state.isNonNull(x) && !state.isNonNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(false, y);
+                    } else if (!state.isNonNull(x) && state.isNonNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(false, x);
+                    }
+                } else {
+                    if (state.isNull(x) && !state.isNonNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(false, y);
+                    } else if (!state.isNonNull(x) && state.isNull(y)) {
+                        metricObjectEqualsRegistered.increment();
+                        state.addNullness(false, x);
                     }
                 }
             }
@@ -510,8 +509,8 @@ public class ConditionalEliminationPhase extends Phase {
                     }
                     PiNode piNode;
                     if (isNull) {
-                        ConstantNode nullObject = ConstantNode.forObject(null, metaAccessProvider, graph);
-                        piNode = graph.unique(new PiNode(nullObject, StampFactory.forConstant(nullObject.value, metaAccessProvider), replacementAnchor.asNode()));
+                        ConstantNode nullObject = ConstantNode.forObject(null, metaAccess, graph);
+                        piNode = graph.unique(new PiNode(nullObject, StampFactory.forConstant(nullObject.value, metaAccess), replacementAnchor.asNode()));
                     } else {
                         piNode = graph.unique(new PiNode(object, StampFactory.declared(type, nonNull), replacementAnchor.asNode()));
                     }
@@ -522,6 +521,23 @@ public class ConditionalEliminationPhase extends Phase {
                         graph.removeFixed(checkCast);
                     }
                     metricCheckCastRemoved.increment();
+                }
+            } else if (node instanceof ConditionAnchorNode) {
+                ConditionAnchorNode conditionAnchorNode = (ConditionAnchorNode) node;
+                LogicNode condition = conditionAnchorNode.condition();
+                ValueNode replacementAnchor = null;
+                if (conditionAnchorNode.isNegated()) {
+                    if (state.falseConditions.containsKey(condition)) {
+                        replacementAnchor = state.falseConditions.get(condition);
+                    }
+                } else {
+                    if (state.trueConditions.containsKey(condition)) {
+                        replacementAnchor = state.trueConditions.get(condition);
+                    }
+                }
+                if (replacementAnchor != null) {
+                    conditionAnchorNode.replaceAtUsages(replacementAnchor);
+                    conditionAnchorNode.graph().removeFixed(conditionAnchorNode);
                 }
             } else if (node instanceof IfNode) {
                 IfNode ifNode = (IfNode) node;

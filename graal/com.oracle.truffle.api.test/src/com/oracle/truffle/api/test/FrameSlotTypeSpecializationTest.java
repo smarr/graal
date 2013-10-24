@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,6 +63,7 @@ public class FrameSlotTypeSpecializationTest {
         @Child TestChildNode right;
 
         public TestRootNode(TestChildNode left, TestChildNode right) {
+            super(null);
             this.left = adoptChild(left);
             this.right = adoptChild(right);
         }
@@ -75,6 +76,10 @@ public class FrameSlotTypeSpecializationTest {
     }
 
     abstract class TestChildNode extends Node {
+
+        protected TestChildNode() {
+            super(null);
+        }
 
         abstract Object execute(VirtualFrame frame);
     }
@@ -110,14 +115,11 @@ public class FrameSlotTypeSpecializationTest {
         Object execute(VirtualFrame frame) {
             Object o = value.execute(frame);
             if (o instanceof Integer) {
-                try {
-                    frame.setInt(slot, (Integer) o);
-                } catch (FrameSlotTypeException e) {
-                    // fall through
-                }
+                frame.setInt(slot, (Integer) o);
+            } else {
+                frame.setObject(slot, o);
+                this.replace(new ObjectAssignLocal(slot, value));
             }
-            frame.setObject(slot, o);
-            this.replace(new ObjectAssignLocal(slot, value));
             return null;
         }
     }

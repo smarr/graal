@@ -34,7 +34,6 @@ import com.oracle.graal.asm.*;
 import com.oracle.graal.compiler.gen.*;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.graph.*;
-import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.lir.*;
 import com.oracle.graal.lir.StandardOp.JumpOp;
 import com.oracle.graal.lir.hsail.*;
@@ -50,24 +49,17 @@ import com.oracle.graal.lir.hsail.HSAILControlFlow.ForeignCall1ArgOp;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.ForeignCallNoArgOp;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.ReturnOp;
 import com.oracle.graal.lir.hsail.HSAILMove.LeaOp;
-import com.oracle.graal.lir.hsail.HSAILMove.LoadCompressedPointer;
-import com.oracle.graal.lir.hsail.HSAILMove.LoadOp;
 import com.oracle.graal.lir.hsail.HSAILMove.MoveFromRegOp;
 import com.oracle.graal.lir.hsail.HSAILMove.MoveToRegOp;
-import com.oracle.graal.lir.hsail.HSAILMove.StoreCompressedPointer;
-import com.oracle.graal.lir.hsail.HSAILMove.StoreOp;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.java.*;
+import com.oracle.graal.phases.util.*;
 
 /**
  * This class implements the HSAIL specific portion of the LIR generator.
  */
-public class HSAILLIRGenerator extends LIRGenerator {
-
-    private HotSpotRuntime runtime() {
-        return (HotSpotRuntime) runtime;
-    }
+public abstract class HSAILLIRGenerator extends LIRGenerator {
 
     public static class HSAILSpillMoveFactory implements LIR.SpillMoveFactory {
 
@@ -83,8 +75,8 @@ public class HSAILLIRGenerator extends LIRGenerator {
         }
     }
 
-    public HSAILLIRGenerator(StructuredGraph graph, CodeCacheProvider runtime, TargetDescription target, FrameMap frameMap, CallingConvention cc, LIR lir) {
-        super(graph, runtime, target, frameMap, cc, lir);
+    public HSAILLIRGenerator(StructuredGraph graph, Providers providers, FrameMap frameMap, CallingConvention cc, LIR lir) {
+        super(graph, providers, frameMap, cc, lir);
         lir.spillMoveFactory = new HSAILSpillMoveFactory();
     }
 
@@ -98,7 +90,7 @@ public class HSAILLIRGenerator extends LIRGenerator {
     public boolean canInlineConstant(Constant c) {
         switch (c.getKind()) {
             case Long:
-                return NumUtil.isInt(c.asLong()) && !runtime.needsDataPatch(c);
+                return NumUtil.isInt(c.asLong()) && !getCodeCache().needsDataPatch(c);
             case Object:
                 return c.isNull();
             default:
@@ -170,41 +162,9 @@ public class HSAILLIRGenerator extends LIRGenerator {
         return new HSAILAddressValue(target().wordKind, baseRegister, finalDisp);
     }
 
-    private static boolean isCompressCandidate(DeoptimizingNode access) {
-        return access != null && ((HeapAccess) access).isCompressible();
-    }
-
-    @Override
-    public Variable emitLoad(Kind kind, Value address, DeoptimizingNode access) {
-        HSAILAddressValue loadAddress = asAddressValue(address);
-        Variable result = newVariable(kind);
-        LIRFrameState state = access != null ? state(access) : null;
-        assert access == null || access instanceof HeapAccess;
-        if (runtime().config.useCompressedOops && isCompressCandidate(access)) {
-            Variable scratch = newVariable(Kind.Long);
-            append(new LoadCompressedPointer(kind, result, scratch, loadAddress, state, runtime().config.narrowOopBase, runtime().config.narrowOopShift, runtime().config.logMinObjAlignment));
-        } else {
-            append(new LoadOp(kind, result, loadAddress, state));
-        }
-        return result;
-    }
-
-    @Override
-    public void emitStore(Kind kind, Value address, Value inputVal, DeoptimizingNode access) {
-        HSAILAddressValue storeAddress = asAddressValue(address);
-        LIRFrameState state = access != null ? state(access) : null;
-        Variable input = load(inputVal);
-        if (runtime().config.useCompressedOops && isCompressCandidate(access)) {
-            Variable scratch = newVariable(Kind.Long);
-            append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, runtime().config.narrowOopBase, runtime().config.narrowOopShift, runtime().config.logMinObjAlignment));
-        } else {
-            append(new StoreOp(kind, storeAddress, input, state));
-        }
-    }
-
     @Override
     public Variable emitAddress(StackSlot address) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -252,12 +212,12 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitOverflowCheckBranch(LabelRef label, boolean negated) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public void emitIntegerTestBranch(Value left, Value right, boolean negated, LabelRef label) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -283,7 +243,7 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public Variable emitIntegerTestMove(Value left, Value right, Value trueValue, Value falseValue) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -475,12 +435,12 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public Variable emitUDiv(Value a, Value b, DeoptimizingNode deopting) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Variable emitURem(Value a, Value b, DeoptimizingNode deopting) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -501,12 +461,12 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public Variable emitOr(Value a, Value b) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Variable emitXor(Value a, Value b) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -527,7 +487,7 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public Variable emitShr(Value a, Value b) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -579,23 +539,23 @@ public class HSAILLIRGenerator extends LIRGenerator {
     }
 
     @Override
-    public void emitDeoptimize(DeoptimizationAction action, DeoptimizingNode deopting) {
+    public void emitDeoptimize(Value actionAndReason, DeoptimizingNode deopting) {
         append(new ReturnOp(Value.ILLEGAL));
     }
 
     @Override
     public void emitMembar(int barriers) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     protected void emitDirectCall(DirectCallTargetNode callTarget, Value result, Value[] parameters, Value[] temps, LIRFrameState callState) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     protected void emitIndirectCall(IndirectCallTargetNode callTarget, Value result, Value[] parameters, Value[] temps, LIRFrameState callState) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -611,11 +571,11 @@ public class HSAILLIRGenerator extends LIRGenerator {
                     append(new ForeignCall1ArgOp(callName, result, arguments[0]));
                     break;
                 default:
-                    throw new InternalError("NYI emitForeignCall");
+                    throw GraalInternalError.unimplemented();
             }
 
         } else {
-            throw new InternalError("NYI emitForeignCall");
+            throw GraalInternalError.unimplemented();
         }
     }
 
@@ -630,17 +590,17 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitBitScanForward(Variable result, Value value) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public void emitBitScanReverse(Variable result, Value value) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Value emitMathAbs(Value input) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -652,27 +612,27 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public Value emitMathLog(Value input, boolean base10) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Value emitMathCos(Value input) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Value emitMathSin(Value input) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public Value emitMathTan(Value input) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public void emitByteSwap(Variable result, Value input) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -682,27 +642,27 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     protected void emitSequentialSwitch(Constant[] keyConstants, LabelRef[] keyTargets, LabelRef defaultTarget, Value key) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     protected void emitSwitchRanges(int[] lowKeys, int[] highKeys, LabelRef[] targets, LabelRef defaultTarget, Value key) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     protected void emitTableSwitch(int lowKey, LabelRef defaultTarget, LabelRef[] targets, Value key) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public void visitCompareAndSwap(LoweredCompareAndSwapNode node, Value address) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
     public void visitBreakpointNode(BreakpointNode node) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -712,7 +672,7 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitUnwind(Value operand) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 
     @Override
@@ -725,6 +685,6 @@ public class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public void visitInfopointNode(InfopointNode i) {
-        throw new InternalError("NYI");
+        throw GraalInternalError.unimplemented();
     }
 }

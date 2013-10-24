@@ -33,20 +33,28 @@ import com.oracle.graal.nodes.*;
 
 public class PTXTargetMethodAssembler extends TargetMethodAssembler {
 
-    private static CompilerToGPU toGPU = HotSpotGraalRuntime.graalRuntime().getCompilerToGPU();
+    private static CompilerToGPU toGPU = HotSpotGraalRuntime.runtime().getCompilerToGPU();
+
     private static boolean validDevice = toGPU.deviceInit();
+
+    private static final int totalProcessors = (validDevice ? toGPU.availableProcessors() : 0);
+
+    public static int getAvailableProcessors() {
+        return totalProcessors;
+    }
 
     // detach ??
 
-    public PTXTargetMethodAssembler(TargetDescription target, CodeCacheProvider runtime, FrameMap frameMap,
-                                    AbstractAssembler asm, FrameContext frameContext, CompilationResult compilationResult) {
-        super(target, runtime, frameMap, asm, frameContext, compilationResult);
+    public PTXTargetMethodAssembler(CodeCacheProvider codeCache, ForeignCallsProvider foreignCalls, FrameMap frameMap, AbstractAssembler asm, FrameContext frameContext,
+                    CompilationResult compilationResult) {
+        super(codeCache, foreignCalls, frameMap, asm, frameContext, compilationResult);
     }
 
     @Override
     public CompilationResult finishTargetMethod(StructuredGraph graph) {
         ResolvedJavaMethod method = graph.method();
         assert method != null : graph + " is not associated wth a method";
+
         ExternalCompilationResult graalCompile = (ExternalCompilationResult) super.finishTargetMethod(graph);
 
         try {

@@ -35,27 +35,28 @@ import com.oracle.graal.api.runtime.*;
 import com.oracle.graal.compiler.test.*;
 import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.runtime.*;
 
 public class InstalledCodeExecuteHelperTest extends GraalCompilerTest {
 
     private static final int ITERATIONS = 100000;
-    private final MetaAccessProvider metaAccessProvider;
+    private final MetaAccessProvider metaAccess;
     Object[] argsToBind;
 
     public InstalledCodeExecuteHelperTest() {
-        this.metaAccessProvider = Graal.getRequiredCapability(MetaAccessProvider.class);
+        this.metaAccess = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getProviders().getMetaAccess();
     }
 
     @Test
     public void test1() throws NoSuchMethodException, SecurityException, InvalidInstalledCodeException {
         final Method fooMethod = InstalledCodeExecuteHelperTest.class.getMethod("foo", Object.class, Object.class, Object.class);
-        final HotSpotResolvedJavaMethod fooJavaMethod = (HotSpotResolvedJavaMethod) metaAccessProvider.lookupJavaMethod(fooMethod);
+        final HotSpotResolvedJavaMethod fooJavaMethod = (HotSpotResolvedJavaMethod) metaAccess.lookupJavaMethod(fooMethod);
         final HotSpotInstalledCode fooCode = (HotSpotInstalledCode) getCode(fooJavaMethod, parse(fooMethod));
 
         argsToBind = new Object[]{fooCode};
 
         final Method benchmarkMethod = InstalledCodeExecuteHelperTest.class.getMethod("benchmark", HotSpotInstalledCode.class);
-        final ResolvedJavaMethod benchmarkJavaMethod = metaAccessProvider.lookupJavaMethod(benchmarkMethod);
+        final ResolvedJavaMethod benchmarkJavaMethod = metaAccess.lookupJavaMethod(benchmarkMethod);
         final HotSpotInstalledCode installedBenchmarkCode = (HotSpotInstalledCode) getCode(benchmarkJavaMethod, parse(benchmarkMethod));
 
         Assert.assertEquals(Integer.valueOf(42), benchmark(fooCode));
@@ -84,12 +85,12 @@ public class InstalledCodeExecuteHelperTest extends GraalCompilerTest {
         if (argsToBind != null) {
             Object receiver = isStatic(m.getModifiers()) ? null : this;
             Object[] args = argsWithReceiver(receiver, argsToBind);
-            JavaType[] parameterTypes = signatureToTypes(runtime.lookupJavaMethod(m));
+            JavaType[] parameterTypes = signatureToTypes(getMetaAccess().lookupJavaMethod(m));
             assert parameterTypes.length == args.length;
             for (int i = 0; i < argsToBind.length; i++) {
                 LocalNode local = graph.getLocal(i);
                 Constant c = Constant.forBoxed(parameterTypes[i].getKind(), argsToBind[i]);
-                ConstantNode replacement = ConstantNode.forConstant(c, runtime, graph);
+                ConstantNode replacement = ConstantNode.forConstant(c, getMetaAccess(), graph);
                 local.replaceAtUsages(replacement);
             }
         }

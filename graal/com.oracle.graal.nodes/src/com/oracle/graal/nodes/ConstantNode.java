@@ -26,7 +26,6 @@ import java.util.*;
 
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
-import com.oracle.graal.graph.iterators.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
@@ -50,27 +49,36 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * 
      * @param value the constant
      */
-    protected ConstantNode(Constant value, MetaAccessProvider runtime) {
-        super(StampFactory.forConstant(value, runtime));
+    protected ConstantNode(Constant value, MetaAccessProvider metaAccess) {
+        super(StampFactory.forConstant(value, metaAccess));
         this.value = value;
     }
 
     @Override
     public void generate(LIRGeneratorTool gen) {
-        if (gen.canInlineConstant(value) || onlyUsedInFrameState()) {
+        if (gen.canInlineConstant(value) || onlyUsedInVirtualState()) {
             gen.setResult(this, value);
         } else {
             gen.setResult(this, gen.emitMove(value));
         }
     }
 
-    private boolean onlyUsedInFrameState() {
-        return usages().filter(NodePredicates.isNotA(FrameState.class)).isEmpty();
+    private boolean onlyUsedInVirtualState() {
+        for (Node n : this.usages()) {
+            if (n instanceof VirtualState) {
+                // Only virtual usage.
+            } else {
+                return false;
+            }
+        }
+        return true;
     }
 
-    public static ConstantNode forConstant(Constant constant, MetaAccessProvider runtime, Graph graph) {
-        if (constant.getKind() == Kind.Object) {
-            return graph.unique(new ConstantNode(constant, runtime));
+    public static ConstantNode forConstant(Constant constant, MetaAccessProvider metaAccess, Graph graph) {
+        if (constant.getKind().getStackKind() == Kind.Int && constant.getKind() != Kind.Int) {
+            return forInt(constant.asInt(), graph);
+        } else if (constant.getKind() == Kind.Object) {
+            return graph.unique(new ConstantNode(constant, metaAccess));
         } else {
             return graph.unique(new ConstantNode(constant));
         }
@@ -136,7 +144,7 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * @return a node representing the boolean
      */
     public static ConstantNode forBoolean(boolean i, Graph graph) {
-        return graph.unique(new ConstantNode(Constant.forBoolean(i)));
+        return graph.unique(new ConstantNode(Constant.forInt(i ? 1 : 0)));
     }
 
     /**
@@ -147,7 +155,7 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * @return a node representing the byte
      */
     public static ConstantNode forByte(byte i, Graph graph) {
-        return graph.unique(new ConstantNode(Constant.forByte(i)));
+        return graph.unique(new ConstantNode(Constant.forInt(i)));
     }
 
     /**
@@ -158,7 +166,7 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * @return a node representing the char
      */
     public static ConstantNode forChar(char i, Graph graph) {
-        return graph.unique(new ConstantNode(Constant.forChar(i)));
+        return graph.unique(new ConstantNode(Constant.forInt(i)));
     }
 
     /**
@@ -169,7 +177,7 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * @return a node representing the short
      */
     public static ConstantNode forShort(short i, Graph graph) {
-        return graph.unique(new ConstantNode(Constant.forShort(i)));
+        return graph.unique(new ConstantNode(Constant.forInt(i)));
     }
 
     /**
@@ -179,9 +187,9 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
      * @param graph
      * @return a node representing the object
      */
-    public static ConstantNode forObject(Object o, MetaAccessProvider runtime, Graph graph) {
+    public static ConstantNode forObject(Object o, MetaAccessProvider metaAccess, Graph graph) {
         assert !(o instanceof Constant) : "wrapping a Constant into a Constant";
-        return graph.unique(new ConstantNode(Constant.forObject(o), runtime));
+        return graph.unique(new ConstantNode(Constant.forObject(o), metaAccess));
     }
 
     public static ConstantNode forIntegerKind(Kind kind, long value, Graph graph) {
@@ -193,7 +201,7 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
             case Long:
                 return ConstantNode.forLong(value, graph);
             default:
-                throw new InternalError("Should not reach here");
+                throw GraalInternalError.shouldNotReachHere("unknown kind " + kind);
         }
     }
 
@@ -204,14 +212,13 @@ public class ConstantNode extends FloatingNode implements LIRLowerable {
             case Double:
                 return ConstantNode.forDouble(value, graph);
             default:
-                throw new InternalError("Should not reach here");
+                throw GraalInternalError.shouldNotReachHere("unknown kind " + kind);
         }
     }
 
     public static ConstantNode defaultForKind(Kind kind, Graph graph) {
         switch (kind) {
             case Boolean:
-                return ConstantNode.forBoolean(false, graph);
             case Byte:
             case Char:
             case Short:

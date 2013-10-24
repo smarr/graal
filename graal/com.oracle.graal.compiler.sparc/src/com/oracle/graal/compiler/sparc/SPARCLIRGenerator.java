@@ -63,6 +63,7 @@ import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.calc.ConvertNode.Op;
 import com.oracle.graal.nodes.java.*;
+import com.oracle.graal.phases.util.*;
 
 /**
  * This class implements the SPARC specific portion of the LIR generator.
@@ -77,8 +78,8 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
         }
     }
 
-    public SPARCLIRGenerator(StructuredGraph graph, CodeCacheProvider runtime, TargetDescription target, FrameMap frameMap, CallingConvention cc, LIR lir) {
-        super(graph, runtime, target, frameMap, cc, lir);
+    public SPARCLIRGenerator(StructuredGraph graph, Providers providers, FrameMap frameMap, CallingConvention cc, LIR lir) {
+        super(graph, providers, frameMap, cc, lir);
         lir.spillMoveFactory = new SPARCSpillMoveFactory();
     }
 
@@ -98,9 +99,9 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
     public boolean canInlineConstant(Constant c) {
         switch (c.getKind()) {
             case Int:
-                return SPARCAssembler.isSimm13(c.asInt()) && !runtime.needsDataPatch(c);
+                return SPARCAssembler.isSimm13(c.asInt()) && !getCodeCache().needsDataPatch(c);
             case Long:
-                return SPARCAssembler.isSimm13(c.asLong()) && !runtime.needsDataPatch(c);
+                return SPARCAssembler.isSimm13(c.asLong()) && !getCodeCache().needsDataPatch(c);
             case Object:
                 return c.isNull();
             default:
@@ -376,7 +377,7 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
         // Making a copy of the switch value is necessary because jump table destroys the input
         // value
         Variable tmp = emitMove(key);
-        append(new TableSwitchOp(lowKey, defaultTarget, targets, tmp, newVariable(target.wordKind)));
+        append(new TableSwitchOp(lowKey, defaultTarget, targets, tmp, newVariable(target().wordKind)));
     }
 
     @Override
@@ -830,14 +831,14 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitMembar(int barriers) {
-        int necessaryBarriers = target.arch.requiredBarriers(barriers);
-        if (target.isMP && necessaryBarriers != 0) {
+        int necessaryBarriers = target().arch.requiredBarriers(barriers);
+        if (target().isMP && necessaryBarriers != 0) {
             append(new MembarOp(necessaryBarriers));
         }
     }
 
     @Override
-    public void emitDeoptimize(DeoptimizationAction action, DeoptimizingNode deopting) {
+    public void emitDeoptimize(Value actionAndReason, DeoptimizingNode deopting) {
         append(new ReturnOp(Value.ILLEGAL));
     }
 
@@ -850,7 +851,7 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
     public void visitBreakpointNode(BreakpointNode node) {
         JavaType[] sig = new JavaType[node.arguments().size()];
         for (int i = 0; i < sig.length; i++) {
-            sig[i] = node.arguments().get(i).stamp().javaType(runtime);
+            sig[i] = node.arguments().get(i).stamp().javaType(getMetaAccess());
         }
 
         Value[] parameters = visitInvokeArguments(frameMap.registerConfig.getCallingConvention(CallingConvention.Type.JavaCall, null, sig, target(), false), node.arguments());

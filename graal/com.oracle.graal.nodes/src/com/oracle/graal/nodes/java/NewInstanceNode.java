@@ -22,8 +22,11 @@
  */
 package com.oracle.graal.nodes.java;
 
+import java.lang.ref.*;
+
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
+import com.oracle.graal.graph.spi.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
@@ -47,6 +50,7 @@ public final class NewInstanceNode extends DeoptimizingFixedWithNextNode impleme
      */
     public NewInstanceNode(ResolvedJavaType type, boolean fillContents) {
         super(StampFactory.exactNonNull(type));
+        assert !type.isArray();
         this.instanceClass = type;
         this.fillContents = fillContents;
     }
@@ -68,7 +72,7 @@ public final class NewInstanceNode extends DeoptimizingFixedWithNextNode impleme
     }
 
     @Override
-    public ValueNode canonical(CanonicalizerTool tool) {
+    public Node canonical(CanonicalizerTool tool) {
         if (usages().isEmpty()) {
             return null;
         } else {
@@ -78,13 +82,16 @@ public final class NewInstanceNode extends DeoptimizingFixedWithNextNode impleme
 
     @Override
     public void lower(LoweringTool tool) {
-        tool.getRuntime().lower(this, tool);
+        tool.getLowerer().lower(this, tool);
     }
 
     @Override
     public void virtualize(VirtualizerTool tool) {
-        if (instanceClass != null) {
-            assert !instanceClass().isArray();
+        /*
+         * Reference objects can escape into their ReferenceQueue at any safepoint, therefore
+         * they're excluded from escape analysis.
+         */
+        if (!tool.getMetaAccessProvider().lookupJavaType(Reference.class).isAssignableFrom(instanceClass)) {
             VirtualInstanceNode virtualObject = new VirtualInstanceNode(instanceClass(), true);
             ResolvedJavaField[] fields = virtualObject.getFields();
             ValueNode[] state = new ValueNode[fields.length];
@@ -99,10 +106,5 @@ public final class NewInstanceNode extends DeoptimizingFixedWithNextNode impleme
     @Override
     public boolean canDeoptimize() {
         return true;
-    }
-
-    @Override
-    public DeoptimizationReason getDeoptimizationReason() {
-        return DeoptimizationReason.RuntimeConstraint;
     }
 }

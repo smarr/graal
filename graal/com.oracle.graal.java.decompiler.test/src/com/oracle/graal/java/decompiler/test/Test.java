@@ -27,8 +27,8 @@ import java.lang.reflect.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.runtime.*;
 import com.oracle.graal.java.decompiler.test.example.*;
-import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.printer.*;
+import com.oracle.graal.runtime.*;
 
 public class Test {
 
@@ -39,9 +39,9 @@ public class Test {
      */
     public static void main(String[] args) throws NoSuchMethodException, SecurityException {
         DebugEnvironment.initialize(System.out);
-        GraalCodeCacheProvider runtime = Graal.getRequiredCapability(GraalCodeCacheProvider.class);
+        MetaAccessProvider metaAccess = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getProviders().getMetaAccess();
         Method method = Example.class.getDeclaredMethod("loop7", new Class[]{int.class, int.class});
-        final ResolvedJavaMethod javaMethod = runtime.lookupJavaMethod(method);
+        final ResolvedJavaMethod javaMethod = metaAccess.lookupJavaMethod(method);
         TestUtil.compileMethod(javaMethod);
     }
 }

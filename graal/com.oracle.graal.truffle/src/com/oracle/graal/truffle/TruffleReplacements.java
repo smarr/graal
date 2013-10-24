@@ -24,14 +24,15 @@ package com.oracle.graal.truffle;
 
 import java.util.*;
 
-import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.replacements.*;
 import com.oracle.graal.api.runtime.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.spi.*;
+import com.oracle.graal.phases.util.*;
 import com.oracle.graal.replacements.*;
+import com.oracle.graal.runtime.*;
 import com.oracle.graal.truffle.substitutions.*;
 
 /**
@@ -41,16 +42,14 @@ public final class TruffleReplacements extends ReplacementsImpl {
 
     private final Replacements graalReplacements;
 
-    private TruffleReplacements(MetaAccessProvider runtime, Assumptions assumptions, TargetDescription target, Replacements graalReplacements) {
-        super(runtime, assumptions, target);
-        this.graalReplacements = graalReplacements;
+    private TruffleReplacements(Providers providers) {
+        super(providers, providers.getReplacements().getAssumptions());
+        this.graalReplacements = providers.getReplacements();
     }
 
     static Replacements makeInstance() {
-        MetaAccessProvider metaAccessProvider = Graal.getRequiredCapability(MetaAccessProvider.class);
-        TargetDescription targetDescription = Graal.getRequiredCapability(CodeCacheProvider.class).getTarget();
-        Replacements graalReplacements = Graal.getRequiredCapability(Replacements.class);
-        Replacements truffleReplacements = new TruffleReplacements(metaAccessProvider, graalReplacements.getAssumptions(), targetDescription, graalReplacements);
+        Providers graalProviders = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getProviders();
+        Replacements truffleReplacements = new TruffleReplacements(graalProviders);
 
         truffleReplacements.registerSubstitutions(CompilerAssertsSubstitutions.class);
         truffleReplacements.registerSubstitutions(CompilerDirectivesSubstitutions.class);

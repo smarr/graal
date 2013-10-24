@@ -137,10 +137,11 @@ public final class HotSpotVMConfig extends CompilerObject {
     public final boolean useCRC32Intrinsics = getVMOption("UseCRC32Intrinsics");
     public final boolean useG1GC = getVMOption("UseG1GC");
     public final long gcTotalCollectionsAddress = getUninitializedLong();
+    public final boolean useDeferredInitBarriers = getVMOption("GraalDeferredInitBarriers");
 
     // Compressed Oops related values.
     public final boolean useCompressedOops = getVMOption("UseCompressedOops");
-    public final boolean useCompressedKlassPointers = getVMOption("UseCompressedKlassPointers");
+    public final boolean useCompressedClassPointers = getVMOption("UseCompressedClassPointers");
     public final long narrowOopBase = getUninitializedLong();
     public final int narrowOopShift = getUninitializedInt();
     public final int logMinObjAlignment = (int) (Math.log(getVMOptionInt("ObjectAlignmentInBytes")) / Math.log(2));
@@ -244,6 +245,16 @@ public final class HotSpotVMConfig extends CompilerObject {
      * The value of JavaThread::osthread_offset().
      */
     public final int osThreadOffset = getUninitializedInt();
+
+    /**
+     * The value of JavaThread::graal_counters_offset().
+     */
+    public final int graalCountersThreadOffset = getUninitializedInt();
+
+    /**
+     * The length of the JavaThread::_graal_counters array.
+     */
+    public final int graalCountersSize = getUninitializedInt();
 
     /**
      * The value of OSThread::interrupted_offset().

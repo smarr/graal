@@ -22,6 +22,7 @@
  */
 package com.oracle.graal.compiler.test.ea;
 
+import java.lang.ref.*;
 import java.util.concurrent.*;
 
 import org.junit.*;
@@ -163,6 +164,20 @@ public class PartialEscapeAnalysisTest extends GraalCompilerTest {
         return value;
     }
 
+    public static int testReference1Snippet(Object a) {
+        SoftReference<Object> softReference = new SoftReference<>(a);
+        if (softReference.get().hashCode() == 0) {
+            return 1;
+        } else {
+            return 2;
+        }
+    }
+
+    @Test
+    public void testReference1() {
+        assertEquals(1, processMethod("testReference1Snippet").getNodes().filter(NewInstanceNode.class).count());
+    }
+
     @SafeVarargs
     final void testMaterialize(final String snippet, double expectedProbability, int expectedCount, Class<? extends Node>... invalidNodeClasses) {
         StructuredGraph result = processMethod(snippet);
@@ -198,7 +213,7 @@ public class PartialEscapeAnalysisTest extends GraalCompilerTest {
                 StructuredGraph graph = parse(snippet);
 
                 Assumptions assumptions = new Assumptions(false);
-                HighTierContext context = new HighTierContext(runtime(), assumptions, replacements, null, getDefaultPhasePlan(), OptimisticOptimizations.ALL);
+                HighTierContext context = new HighTierContext(getProviders(), assumptions, null, getDefaultPhasePlan(), OptimisticOptimizations.ALL);
                 new InliningPhase(new CanonicalizerPhase(true)).apply(graph, context);
                 new DeadCodeEliminationPhase().apply(graph);
                 new CanonicalizerPhase(true).apply(graph, context);

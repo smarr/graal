@@ -22,8 +22,8 @@
  */
 package com.oracle.graal.java;
 
-import static com.oracle.graal.api.code.DeoptimizationAction.*;
 import static com.oracle.graal.api.code.TypeCheckHints.*;
+import static com.oracle.graal.api.meta.DeoptimizationAction.*;
 import static com.oracle.graal.api.meta.DeoptimizationReason.*;
 import static com.oracle.graal.bytecode.Bytecodes.*;
 import static com.oracle.graal.java.GraphBuilderPhase.RuntimeCalls.*;
@@ -50,7 +50,6 @@ import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
 import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.nodes.util.*;
 import com.oracle.graal.phases.*;
-import com.oracle.graal.phases.util.*;
 
 /**
  * The {@code GraphBuilder} class parses the bytecode of a method and builds the IR graph.
@@ -86,7 +85,8 @@ public class GraphBuilderPhase extends Phase {
      */
     protected BlockPlaceholderNode placeholders;
 
-    private final MetaAccessProvider runtime;
+    private final MetaAccessProvider metaAccess;
+    private final ForeignCallsProvider foreignCalls;
     private ConstantPool constantPool;
     private ResolvedJavaMethod method;
     private int entryBCI;
@@ -151,11 +151,12 @@ public class GraphBuilderPhase extends Phase {
         return currentGraph;
     }
 
-    public GraphBuilderPhase(MetaAccessProvider runtime, GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts) {
+    public GraphBuilderPhase(MetaAccessProvider metaAccess, ForeignCallsProvider foreignCalls, GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts) {
         this.graphBuilderConfig = graphBuilderConfig;
         this.optimisticOpts = optimisticOpts;
-        this.runtime = runtime;
-        assert runtime != null;
+        this.metaAccess = metaAccess;
+        this.foreignCalls = foreignCalls;
+        assert metaAccess != null;
     }
 
     @Override
@@ -436,7 +437,7 @@ public class GraphBuilderPhase extends Phase {
 
         DispatchBeginNode dispatchBegin;
         if (exceptionObject == null) {
-            dispatchBegin = currentGraph.add(new ExceptionObjectNode(runtime));
+            dispatchBegin = currentGraph.add(new ExceptionObjectNode(metaAccess));
             dispatchState.apush(dispatchBegin);
             dispatchState.setRethrowException(true);
             dispatchBegin.setStateAfter(dispatchState.create(bci));
@@ -895,7 +896,7 @@ public class GraphBuilderPhase extends Phase {
 
     private void genNewPrimitiveArray(int typeCode) {
         Class<?> clazz = arrayTypeCodeToClass(typeCode);
-        ResolvedJavaType elementType = runtime.lookupJavaType(clazz);
+        ResolvedJavaType elementType = metaAccess.lookupJavaType(clazz);
         frameState.apush(append(new NewArrayNode(elementType, frameState.ipop(), true)));
     }
 
@@ -957,10 +958,10 @@ public class GraphBuilderPhase extends Phase {
         lastInstr = falseSucc;
 
         if (OmitHotExceptionStacktrace.getValue()) {
-            ValueNode exception = ConstantNode.forObject(cachedNullPointerException, runtime, currentGraph);
+            ValueNode exception = ConstantNode.forObject(cachedNullPointerException, metaAccess, currentGraph);
             trueSucc.setNext(handleException(exception, bci()));
         } else {
-            ForeignCallNode call = currentGraph.add(new ForeignCallNode(runtime, CREATE_NULL_POINTER_EXCEPTION));
+            ForeignCallNode call = currentGraph.add(new ForeignCallNode(foreignCalls, CREATE_NULL_POINTER_EXCEPTION));
             call.setStateAfter(frameState.create(bci()));
             trueSucc.setNext(call);
             call.setNext(handleException(call, bci()));
@@ -981,10 +982,10 @@ public class GraphBuilderPhase extends Phase {
         lastInstr = trueSucc;
 
         if (OmitHotExceptionStacktrace.getValue()) {
-            ValueNode exception = ConstantNode.forObject(cachedArrayIndexOutOfBoundsException, runtime, currentGraph);
+            ValueNode exception = ConstantNode.forObject(cachedArrayIndexOutOfBoundsException, metaAccess, currentGraph);
             falseSucc.setNext(handleException(exception, bci()));
         } else {
-            ForeignCallNode call = currentGraph.add(new ForeignCallNode(runtime, CREATE_OUT_OF_BOUNDS_EXCEPTION, index));
+            ForeignCallNode call = currentGraph.add(new ForeignCallNode(foreignCalls, CREATE_OUT_OF_BOUNDS_EXCEPTION, index));
             call.setStateAfter(frameState.create(bci()));
             falseSucc.setNext(call);
             call.setNext(handleException(call, bci()));
@@ -1082,7 +1083,7 @@ public class GraphBuilderPhase extends Phase {
         if (target instanceof ResolvedJavaMethod) {
             Object appendix = constantPool.lookupAppendix(stream.readCPI4(), Bytecodes.INVOKEDYNAMIC);
             if (appendix != null) {
-                frameState.apush(ConstantNode.forObject(appendix, runtime, currentGraph));
+                frameState.apush(ConstantNode.forObject(appendix, metaAccess, currentGraph));
             }
             ValueNode[] args = frameState.popArguments(target.getSignature().getParameterSlots(false), target.getSignature().getParameterCount(false));
             appendInvoke(InvokeKind.Static, (ResolvedJavaMethod) target, args);
@@ -1099,7 +1100,7 @@ public class GraphBuilderPhase extends Phase {
             boolean hasReceiver = !isStatic(((ResolvedJavaMethod) target).getModifiers());
             Object appendix = constantPool.lookupAppendix(stream.readCPI(), Bytecodes.INVOKEVIRTUAL);
             if (appendix != null) {
-                frameState.apush(ConstantNode.forObject(appendix, runtime, currentGraph));
+                frameState.apush(ConstantNode.forObject(appendix, metaAccess, currentGraph));
             }
             ValueNode[] args = frameState.popArguments(target.getSignature().getParameterSlots(hasReceiver), target.getSignature().getParameterCount(hasReceiver));
             if (hasReceiver) {
@@ -1217,12 +1218,12 @@ public class GraphBuilderPhase extends Phase {
         return monitorEnter;
     }
 
-    private MonitorExitNode genMonitorExit(ValueNode x) {
+    private MonitorExitNode genMonitorExit(ValueNode x, ValueNode returnValue) {
         ValueNode lockedObject = frameState.popLock();
         if (GraphUtil.originalValue(lockedObject) != GraphUtil.originalValue(x)) {
             throw new BailoutException("unbalanced monitors: mismatch at monitorexit, %s != %s", GraphUtil.originalValue(x), GraphUtil.originalValue(lockedObject));
         }
-        MonitorExitNode monitorExit = append(new MonitorExitNode(x, frameState.lockDepth()));
+        MonitorExitNode monitorExit = append(new MonitorExitNode(x, returnValue, frameState.lockDepth()));
         return monitorExit;
     }
 
@@ -1352,7 +1353,7 @@ public class GraphBuilderPhase extends Phase {
 
     protected ConstantNode appendConstant(Constant constant) {
         assert constant != null;
-        return ConstantNode.forConstant(constant, runtime, currentGraph);
+        return ConstantNode.forConstant(constant, metaAccess, currentGraph);
     }
 
     private <T extends ControlSinkNode> T append(T fixed) {
@@ -1618,7 +1619,7 @@ public class GraphBuilderPhase extends Phase {
         assert frameState.stackSize() == 1 : frameState;
         ValueNode exception = frameState.apop();
         append(new FixedGuardNode(currentGraph.unique(new IsNullNode(exception)), NullCheckException, InvalidateReprofile, true));
-        synchronizedEpilogue(FrameState.AFTER_EXCEPTION_BCI);
+        synchronizedEpilogue(FrameState.AFTER_EXCEPTION_BCI, null);
         append(new UnwindNode(exception));
     }
 
@@ -1627,7 +1628,7 @@ public class GraphBuilderPhase extends Phase {
         ValueNode x = returnKind == Kind.Void ? null : frameState.pop(returnKind);
         assert frameState.stackSize() == 0;
 
-        synchronizedEpilogue(FrameState.AFTER_BCI);
+        synchronizedEpilogue(FrameState.AFTER_BCI, x);
         if (frameState.lockDepth() != 0) {
             throw new BailoutException("unbalanced monitors");
         }
@@ -1639,9 +1640,9 @@ public class GraphBuilderPhase extends Phase {
         append(new ReturnNode(x));
     }
 
-    private void synchronizedEpilogue(int bci) {
+    private void synchronizedEpilogue(int bci, ValueNode returnValue) {
         if (Modifier.isSynchronized(method.getModifiers())) {
-            MonitorExitNode monitorExit = genMonitorExit(methodSynchronizedObject);
+            MonitorExitNode monitorExit = genMonitorExit(methodSynchronizedObject, returnValue);
             monitorExit.setStateAfter(frameState.create(bci));
             assert !frameState.rethrowException();
         }
@@ -1693,20 +1694,7 @@ public class GraphBuilderPhase extends Phase {
     }
 
     private static boolean isBlockEnd(Node n) {
-        return trueSuccessorCount(n) > 1 || n instanceof ReturnNode || n instanceof UnwindNode || n instanceof DeoptimizeNode;
-    }
-
-    private static int trueSuccessorCount(Node n) {
-        if (n == null) {
-            return 0;
-        }
-        int i = 0;
-        for (Node s : n.successors()) {
-            if (Util.isFixed(s)) {
-                i++;
-            }
-        }
-        return i;
+        return n instanceof ControlSplitNode || n instanceof ControlSinkNode;
     }
 
     private void iterateBytecodesForBlock(Block block) {
@@ -2014,7 +2002,7 @@ public class GraphBuilderPhase extends Phase {
             case CHECKCAST      : genCheckCast(); break;
             case INSTANCEOF     : genInstanceOf(); break;
             case MONITORENTER   : genMonitorEnter(frameState.apop()); break;
-            case MONITOREXIT    : genMonitorExit(frameState.apop()); break;
+            case MONITOREXIT    : genMonitorExit(frameState.apop(), null); break;
             case MULTIANEWARRAY : genNewMultiArray(stream.readCPI()); break;
             case IFNULL         : genIfNull(Condition.EQ); break;
             case IFNONNULL      : genIfNull(Condition.NE); break;

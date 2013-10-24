@@ -33,6 +33,7 @@ import com.oracle.graal.graph.Graph.DuplicationReplacement;
 import com.oracle.graal.graph.Node.Input;
 import com.oracle.graal.graph.Node.Successor;
 import com.oracle.graal.graph.Node.Verbosity;
+import com.oracle.graal.graph.spi.*;
 
 /**
  * Lazily associated metadata for every {@link Node} type. The metadata includes:
@@ -124,7 +125,8 @@ public final class NodeClass extends FieldIntrospection {
         return registry.make(key);
     }
 
-    static final int NOT_ITERABLE = -1;
+    public static final int NOT_ITERABLE = -1;
+    public static final int NODE_LIST = -2;
 
     private static final Class<?> NODE_CLASS = Node.class;
     private static final Class<?> INPUT_LIST_CLASS = NodeInputList.class;
@@ -148,9 +150,21 @@ public final class NodeClass extends FieldIntrospection {
     private static final DebugMetric ITERABLE_NODE_TYPES = Debug.metric("IterableNodeTypes");
     private final DebugMetric nodeIterableCount;
 
+    /**
+     * Determines if this node type implements {@link Canonicalizable}.
+     */
+    private final boolean isCanonicalizable;
+
+    /**
+     * Determines if this node type implements {@link Simplifiable}.
+     */
+    private final boolean isSimplifiable;
+
     private NodeClass(Class<?> clazz) {
         super(clazz);
         assert NODE_CLASS.isAssignableFrom(clazz);
+        this.isCanonicalizable = Canonicalizable.class.isAssignableFrom(clazz);
+        this.isSimplifiable = Simplifiable.class.isAssignableFrom(clazz);
 
         FieldScanner scanner = new FieldScanner(new DefaultCalcOffset());
         scanner.scan(clazz);
@@ -257,6 +271,20 @@ public final class NodeClass extends FieldIntrospection {
 
     public boolean isLeafNode() {
         return isLeafNode;
+    }
+
+    /**
+     * Determines if this node type implements {@link Canonicalizable}.
+     */
+    public boolean isCanonicalizable() {
+        return isCanonicalizable;
+    }
+
+    /**
+     * Determines if this node type implements {@link Simplifiable}.
+     */
+    public boolean isSimplifiable() {
+        return isSimplifiable;
     }
 
     public static int cacheSize() {
@@ -418,22 +446,17 @@ public final class NodeClass extends FieldIntrospection {
     }
 
     /**
-     * An iterator that will iterate over the fields given in {@link #offsets}. The first
-     * {@link #directCount} offsets are treated as fields of type {@link Node}, while the rest of
-     * the fields are treated as {@link NodeList}s. All elements of these NodeLists will be visited
-     * by the iterator as well. This iterator can be used to iterate over the inputs or successors
-     * of a node.
+     * An iterator that will iterate over the fields given in {@link #getOffsets()}. The first
+     * {@link #getDirectCount()} offsets are treated as fields of type {@link Node}, while the rest
+     * of the fields are treated as {@link NodeList}s. All elements of these NodeLists will be
+     * visited by the iterator as well. This iterator can be used to iterate over the inputs or
+     * successors of a node.
      * 
      * An iterator of this type will not return null values, unless the field values are modified
      * concurrently. Concurrent modifications are detected by an assertion on a best-effort basis.
      */
-    public static final class NodeClassIterator implements Iterator<Node> {
-
-        private final NodeClass nodeClass;
-        private final Node node;
-        private final int modCount;
-        private final int directCount;
-        private final long[] offsets;
+    public abstract static class NodeClassIterator implements Iterator<Node> {
+        protected final Node node;
         private int index;
         private int subIndex;
 
@@ -441,26 +464,18 @@ public final class NodeClass extends FieldIntrospection {
          * Creates an iterator that will iterate over fields in the given node.
          * 
          * @param node the node which contains the fields.
-         * @param offsets the offsets of the fields.
-         * @param directCount the number of fields that should be treated as fields of type
-         *            {@link Node}, the rest are treated as {@link NodeList}s.
          */
-        private NodeClassIterator(Node node, long[] offsets, int directCount) {
+        NodeClassIterator(Node node) {
             this.node = node;
-            this.nodeClass = node.getNodeClass();
-            this.modCount = MODIFICATION_COUNTS_ENABLED ? node.modCount() : 0;
-            this.offsets = offsets;
-            this.directCount = directCount;
             index = NOT_ITERABLE;
             subIndex = 0;
-            forward();
         }
 
-        private void forward() {
-            if (index < directCount) {
+        void forward() {
+            if (index < getDirectCount()) {
                 index++;
-                while (index < directCount) {
-                    Node element = getNode(node, offsets[index]);
+                while (index < getDirectCount()) {
+                    Node element = getNode(node, getOffsets()[index]);
                     if (element != null) {
                         return;
                     }
@@ -469,8 +484,8 @@ public final class NodeClass extends FieldIntrospection {
             } else {
                 subIndex++;
             }
-            while (index < offsets.length) {
-                NodeList<Node> list = getNodeList(node, offsets[index]);
+            while (index < getOffsets().length) {
+                NodeList<Node> list = getNodeList(node, getOffsets()[index]);
                 while (subIndex < list.size()) {
                     if (list.get(subIndex) != null) {
                         return;
@@ -483,10 +498,10 @@ public final class NodeClass extends FieldIntrospection {
         }
 
         private Node nextElement() {
-            if (index < directCount) {
-                return getNode(node, offsets[index]);
-            } else if (index < offsets.length) {
-                NodeList<Node> list = getNodeList(node, offsets[index]);
+            if (index < getDirectCount()) {
+                return getNode(node, getOffsets()[index]);
+            } else if (index < getOffsets().length) {
+                NodeList<Node> list = getNodeList(node, getOffsets()[index]);
                 return list.get(subIndex);
             }
             throw new NoSuchElementException();
@@ -494,11 +509,7 @@ public final class NodeClass extends FieldIntrospection {
 
         @Override
         public boolean hasNext() {
-            try {
-                return index < offsets.length;
-            } finally {
-                assert modCount == node.modCount() : "must not be modified";
-            }
+            return index < getOffsets().length;
         }
 
         @Override
@@ -507,26 +518,164 @@ public final class NodeClass extends FieldIntrospection {
                 return nextElement();
             } finally {
                 forward();
-                assert modCount == node.modCount();
             }
         }
 
         public Position nextPosition() {
             try {
-                if (index < directCount) {
-                    return new Position(offsets == nodeClass.inputOffsets, index, NOT_ITERABLE);
+                if (index < getDirectCount()) {
+                    return new Position(getOffsets() == getNodeClass().inputOffsets, index, NOT_ITERABLE);
                 } else {
-                    return new Position(offsets == nodeClass.inputOffsets, index, subIndex);
+                    return new Position(getOffsets() == getNodeClass().inputOffsets, index, subIndex);
                 }
             } finally {
                 forward();
-                assert modCount == node.modCount();
             }
         }
 
         @Override
         public void remove() {
             throw new UnsupportedOperationException();
+        }
+
+        protected abstract int getDirectCount();
+
+        protected abstract long[] getOffsets();
+
+        protected abstract NodeClass getNodeClass();
+    }
+
+    private class NodeClassInputsIterator extends NodeClassIterator {
+        NodeClassInputsIterator(Node node) {
+            this(node, true);
+        }
+
+        NodeClassInputsIterator(Node node, boolean forward) {
+            super(node);
+            assert NodeClass.this == node.getNodeClass();
+            if (forward) {
+                forward();
+            }
+        }
+
+        @Override
+        protected int getDirectCount() {
+            return directInputCount;
+        }
+
+        @Override
+        protected long[] getOffsets() {
+            return inputOffsets;
+        }
+
+        @Override
+        protected NodeClass getNodeClass() {
+            return NodeClass.this;
+        }
+    }
+
+    private final class NodeClassInputsWithModCountIterator extends NodeClassInputsIterator {
+        private final int modCount;
+
+        private NodeClassInputsWithModCountIterator(Node node) {
+            super(node, false);
+            assert MODIFICATION_COUNTS_ENABLED;
+            this.modCount = node.modCount();
+            forward();
+        }
+
+        @Override
+        public boolean hasNext() {
+            try {
+                return super.hasNext();
+            } finally {
+                assert modCount == node.modCount() : "must not be modified";
+            }
+        }
+
+        @Override
+        public Node next() {
+            try {
+                return super.next();
+            } finally {
+                assert modCount == node.modCount() : "must not be modified";
+            }
+        }
+
+        @Override
+        public Position nextPosition() {
+            try {
+                return super.nextPosition();
+            } finally {
+                assert modCount == node.modCount();
+            }
+        }
+    }
+
+    private class NodeClassSuccessorsIterator extends NodeClassIterator {
+        NodeClassSuccessorsIterator(Node node) {
+            this(node, true);
+        }
+
+        NodeClassSuccessorsIterator(Node node, boolean forward) {
+            super(node);
+            assert NodeClass.this == node.getNodeClass();
+            if (forward) {
+                forward();
+            }
+        }
+
+        @Override
+        protected int getDirectCount() {
+            return directSuccessorCount;
+        }
+
+        @Override
+        protected long[] getOffsets() {
+            return successorOffsets;
+        }
+
+        @Override
+        protected NodeClass getNodeClass() {
+            return NodeClass.this;
+        }
+    }
+
+    private final class NodeClassSuccessorsWithModCountIterator extends NodeClassSuccessorsIterator {
+        private final int modCount;
+
+        private NodeClassSuccessorsWithModCountIterator(Node node) {
+            super(node, false);
+            assert MODIFICATION_COUNTS_ENABLED;
+            this.modCount = node.modCount();
+            forward();
+        }
+
+        @Override
+        public boolean hasNext() {
+            try {
+                return super.hasNext();
+            } finally {
+                assert modCount == node.modCount() : "must not be modified";
+            }
+        }
+
+        @Override
+        public Node next() {
+            try {
+                return super.next();
+            } finally {
+                assert modCount == node.modCount() : "must not be modified";
+            }
+        }
+
+        @Override
+        public Position nextPosition() {
+            try {
+                return super.nextPosition();
+            } finally {
+                assert modCount == node.modCount();
+            }
         }
     }
 
@@ -669,6 +818,12 @@ public final class NodeClass extends FieldIntrospection {
         }
     }
 
+    public NodeList<?> getNodeList(Node node, Position pos) {
+        long offset = pos.input ? inputOffsets[pos.index] : successorOffsets[pos.index];
+        assert pos.subIndex == NODE_LIST;
+        return getNodeList(node, offset);
+    }
+
     public String getName(Position pos) {
         return fieldNames.get(pos.input ? inputOffsets[pos.index] : successorOffsets[pos.index]);
     }
@@ -781,7 +936,11 @@ public final class NodeClass extends FieldIntrospection {
 
             @Override
             public NodeClassIterator iterator() {
-                return new NodeClassIterator(node, inputOffsets, directInputCount);
+                if (MODIFICATION_COUNTS_ENABLED) {
+                    return new NodeClassInputsWithModCountIterator(node);
+                } else {
+                    return new NodeClassInputsIterator(node);
+                }
             }
 
             @Override
@@ -797,7 +956,11 @@ public final class NodeClass extends FieldIntrospection {
 
             @Override
             public NodeClassIterator iterator() {
-                return new NodeClassIterator(node, successorOffsets, directSuccessorCount);
+                if (MODIFICATION_COUNTS_ENABLED) {
+                    return new NodeClassSuccessorsWithModCountIterator(node);
+                } else {
+                    return new NodeClassSuccessorsIterator(node);
+                }
             }
 
             @Override
@@ -1019,20 +1182,64 @@ public final class NodeClass extends FieldIntrospection {
         return false;
     }
 
-    public List<Position> getFirstLevelInputPositions() {
-        List<Position> positions = new ArrayList<>(inputOffsets.length);
-        for (int i = 0; i < inputOffsets.length; i++) {
-            positions.add(new Position(true, i, NOT_ITERABLE));
-        }
-        return positions;
+    public Collection<Position> getFirstLevelInputPositions() {
+        return new AbstractCollection<Position>() {
+            @Override
+            public Iterator<Position> iterator() {
+                return new Iterator<NodeClass.Position>() {
+                    int i = 0;
+
+                    public void remove() {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    public Position next() {
+                        Position pos = new Position(true, i, i >= directInputCount ? 0 : NOT_ITERABLE);
+                        i++;
+                        return pos;
+                    }
+
+                    public boolean hasNext() {
+                        return i < inputOffsets.length;
+                    }
+                };
+            }
+
+            @Override
+            public int size() {
+                return inputOffsets.length;
+            }
+        };
     }
 
-    public List<Position> getFirstLevelSuccessorPositions() {
-        List<Position> positions = new ArrayList<>(successorOffsets.length);
-        for (int i = 0; i < successorOffsets.length; i++) {
-            positions.add(new Position(false, i, NOT_ITERABLE));
-        }
-        return positions;
+    public Collection<Position> getFirstLevelSuccessorPositions() {
+        return new AbstractCollection<Position>() {
+            @Override
+            public Iterator<Position> iterator() {
+                return new Iterator<NodeClass.Position>() {
+                    int i = 0;
+
+                    public void remove() {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    public Position next() {
+                        Position pos = new Position(false, i, i >= directSuccessorCount ? 0 : NOT_ITERABLE);
+                        i++;
+                        return pos;
+                    }
+
+                    public boolean hasNext() {
+                        return i < successorOffsets.length;
+                    }
+                };
+            }
+
+            @Override
+            public int size() {
+                return successorOffsets.length;
+            }
+        };
     }
 
     public Class<?> getJavaClass() {

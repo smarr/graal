@@ -34,7 +34,7 @@ public class TruffleCompilerOptions {
     /**
      * Instructs the Truffle Compiler to compile call targets only if their name contains at least one element of a comma-separated list of includes.
      * Excludes are prefixed with a tilde (~).
-     * 
+     *
      * The format in EBNF:
      * <pre>
      * CompileOnly = Element, { ',', Element } ;
@@ -56,17 +56,13 @@ public class TruffleCompilerOptions {
     @Option(help = "")
     public static final OptionValue<Boolean> TruffleFunctionInlining = new OptionValue<>(true);
     @Option(help = "")
-    public static final OptionValue<Integer> TruffleConstantUnrollLimit = new OptionValue<>(32);
-    @Option(help = "")
-    public static final OptionValue<Integer> TruffleOperationCacheMaxNodes = new OptionValue<>(350);
-    @Option(help = "")
-    public static final OptionValue<Integer> TruffleGraphMaxNodes = new OptionValue<>(20000);
+    public static final OptionValue<Integer> TruffleGraphMaxNodes = new OptionValue<>(25000);
     @Option(help = "")
     public static final OptionValue<Integer> TruffleInliningMaxRecursiveDepth = new OptionValue<>(2);
     @Option(help = "")
-    public static final OptionValue<Integer> TruffleInliningMaxCallerSize = new OptionValue<>(600);
+    public static final OptionValue<Integer> TruffleInliningMaxCallerSize = new OptionValue<>(2500);
     @Option(help = "")
-    public static final OptionValue<Integer> TruffleInliningMaxCalleeSize = new OptionValue<>(62);
+    public static final OptionValue<Integer> TruffleInliningMaxCalleeSize = new OptionValue<>(250);
     @Option(help = "")
     public static final OptionValue<Integer> TruffleInliningTrivialSize = new OptionValue<>(10);
     @Option(help = "")
@@ -74,7 +70,12 @@ public class TruffleCompilerOptions {
     @Option(help = "")
     public static final OptionValue<Boolean> TruffleUseTimeForCompilationDecision = new OptionValue<>(false);
     @Option(help = "")
-    public static final OptionValue<Integer> TruffleCompilationDecisionTime = new OptionValue<>(100);
+    public static final OptionValue<Long> TruffleCompilationDecisionTime = new OptionValue<>(100 * 1000000L);
+    @Option(help = "")
+    public static final OptionValue<Boolean> TruffleCompilationDecisionTimePrintFail = new OptionValue<>(false);
+    @Option(help = "")
+    public static final OptionValue<Boolean> TruffleBackgroundCompilation = new OptionValue<>(true);
+
     // tracing
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleCompilation = new OptionValue<>(true);
@@ -82,10 +83,6 @@ public class TruffleCompilerOptions {
     public static final OptionValue<Boolean> TraceTruffleCompilationDetails = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleCacheDetails = new OptionValue<>(false);
-    @Option(help = "")
-    public static final OptionValue<Boolean> TraceTrufflePerformanceWarnings = new OptionValue<>(false);
-    @Option(help = "")
-    public static final OptionValue<Boolean> TruffleInlinePrinter = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleCompilationExceptions = new OptionValue<>(true);
     @Option(help = "")

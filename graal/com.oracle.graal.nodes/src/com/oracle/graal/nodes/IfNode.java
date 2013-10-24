@@ -30,6 +30,7 @@ import com.oracle.graal.api.meta.ProfilingInfo.TriState;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.iterators.*;
+import com.oracle.graal.graph.spi.*;
 import com.oracle.graal.nodes.PhiNode.PhiType;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.java.*;
@@ -182,7 +183,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
             if (this.trueSuccessorProbability < probabilityB) {
                 // Reordering of those two if statements is beneficial from the point of view of
                 // their probabilities.
-                if (prepareForSwap(tool.runtime(), condition(), nextIf.condition(), this.trueSuccessorProbability, probabilityB)) {
+                if (prepareForSwap(tool.getConstantReflection(), condition(), nextIf.condition(), this.trueSuccessorProbability, probabilityB)) {
                     // Reording is allowed from (if1 => begin => if2) to (if2 => begin => if1).
                     assert intermediateBegin.next() == nextIf;
                     AbstractBeginNode bothFalseBegin = nextIf.falseSuccessor();
@@ -207,7 +208,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         }
     }
 
-    private static boolean prepareForSwap(MetaAccessProvider runtime, LogicNode a, LogicNode b, double probabilityA, double probabilityB) {
+    private static boolean prepareForSwap(ConstantReflectionProvider constantReflection, LogicNode a, LogicNode b, double probabilityA, double probabilityB) {
         if (a instanceof InstanceOfNode) {
             InstanceOfNode instanceOfA = (InstanceOfNode) a;
             if (b instanceof IsNullNode) {
@@ -296,13 +297,13 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                     }
                 } else if (conditionA == Condition.EQ && conditionB == Condition.EQ) {
                     boolean canSwap = false;
-                    if ((compareA.x() == compareB.x() && valuesDistinct(runtime, compareA.y(), compareB.y()))) {
+                    if ((compareA.x() == compareB.x() && valuesDistinct(constantReflection, compareA.y(), compareB.y()))) {
                         canSwap = true;
-                    } else if ((compareA.x() == compareB.y() && valuesDistinct(runtime, compareA.y(), compareB.x()))) {
+                    } else if ((compareA.x() == compareB.y() && valuesDistinct(constantReflection, compareA.y(), compareB.x()))) {
                         canSwap = true;
-                    } else if ((compareA.y() == compareB.x() && valuesDistinct(runtime, compareA.x(), compareB.y()))) {
+                    } else if ((compareA.y() == compareB.x() && valuesDistinct(constantReflection, compareA.x(), compareB.y()))) {
                         canSwap = true;
-                    } else if ((compareA.y() == compareB.y() && valuesDistinct(runtime, compareA.x(), compareB.x()))) {
+                    } else if ((compareA.y() == compareB.y() && valuesDistinct(constantReflection, compareA.x(), compareB.x()))) {
                         canSwap = true;
                     }
 
@@ -317,9 +318,9 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         return false;
     }
 
-    private static boolean valuesDistinct(MetaAccessProvider runtime, ValueNode a, ValueNode b) {
+    private static boolean valuesDistinct(ConstantReflectionProvider constantReflection, ValueNode a, ValueNode b) {
         if (a.isConstant() && b.isConstant()) {
-            return !runtime.constantEquals(a.asConstant(), b.asConstant());
+            return !constantReflection.constantEquals(a.asConstant(), b.asConstant());
         }
 
         Stamp stampA = a.stamp();
@@ -357,9 +358,9 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                         if (trueValue.kind() != Kind.Int && trueValue.kind() != Kind.Long) {
                             return false;
                         }
-                        if (trueValue.isConstant() && falseValue.isConstant()) {
-                            ConditionalNode materialize = graph().unique(new ConditionalNode(condition(), trueValue, falseValue));
-                            graph().replaceFloating(singlePhi, materialize);
+                        ConditionalNode conditional = canonicalizeConditionalCascade(trueValue, falseValue);
+                        if (conditional != null) {
+                            graph().replaceFloating(singlePhi, conditional);
                             removeEmptyIf(tool);
                             return true;
                         }
@@ -368,6 +369,44 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
             }
         }
         return false;
+    }
+
+    private ConditionalNode canonicalizeConditionalCascade(ValueNode trueValue, ValueNode falseValue) {
+        if (trueValue.isConstant() && falseValue.isConstant()) {
+            return graph().unique(new ConditionalNode(condition(), trueValue, falseValue));
+        } else {
+            ConditionalNode conditional = null;
+            ValueNode constant = null;
+            boolean negateCondition;
+            if (trueValue instanceof ConditionalNode && falseValue.isConstant()) {
+                conditional = (ConditionalNode) trueValue;
+                constant = falseValue;
+                negateCondition = true;
+            } else if (falseValue instanceof ConditionalNode && trueValue.isConstant()) {
+                conditional = (ConditionalNode) falseValue;
+                constant = trueValue;
+                negateCondition = false;
+            } else {
+                return null;
+            }
+            boolean negateConditionalCondition;
+            ValueNode otherValue;
+            if (constant == conditional.x()) {
+                otherValue = conditional.y();
+                negateConditionalCondition = false;
+            } else if (constant == conditional.y()) {
+                otherValue = conditional.x();
+                negateConditionalCondition = true;
+            } else {
+                return null;
+            }
+            if (otherValue.isConstant()) {
+                double shortCutProbability = probability(trueSuccessor());
+                LogicNode newCondition = LogicNode.or(condition(), negateCondition, conditional.condition(), negateConditionalCondition, shortCutProbability);
+                return graph().unique(new ConditionalNode(newCondition, constant, otherValue));
+            }
+        }
+        return null;
     }
 
     /**
@@ -461,8 +500,8 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         List<AbstractEndNode> mergePredecessors = merge.cfgPredecessors().snapshot();
         assert phi.valueCount() == merge.forwardEndCount();
 
-        Constant[] xs = constantValues(compare.x(), merge);
-        Constant[] ys = constantValues(compare.y(), merge);
+        Constant[] xs = constantValues(compare.x(), merge, false);
+        Constant[] ys = constantValues(compare.y(), merge, false);
         if (xs == null || ys == null) {
             return false;
         }
@@ -486,7 +525,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         for (int i = 0; i < xs.length; i++) {
             AbstractEndNode end = ends.next();
             phiValues.put(end, phi.valueAt(end));
-            if (compare.condition().foldCondition(xs[i], ys[i], tool.runtime(), compare.unorderedIsTrue())) {
+            if (compare.condition().foldCondition(xs[i], ys[i], tool.getConstantReflection(), compare.unorderedIsTrue())) {
                 trueEnds.add(end);
             } else {
                 falseEnds.add(end);
@@ -606,7 +645,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
      * @return null if {@code node} is neither a {@link ConstantNode} nor a {@link PhiNode} whose
      *         input values are all constants
      */
-    private static Constant[] constantValues(ValueNode node, MergeNode merge) {
+    public static Constant[] constantValues(ValueNode node, MergeNode merge, boolean allowNull) {
         if (node.isConstant()) {
             Constant[] result = new Constant[merge.forwardEndCount()];
             Arrays.fill(result, node.asConstant());
@@ -619,7 +658,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                 Constant[] result = new Constant[merge.forwardEndCount()];
                 int i = 0;
                 for (ValueNode n : phi.values()) {
-                    if (!n.isConstant()) {
+                    if (!allowNull && !n.isConstant()) {
                         return null;
                     }
                     result[i++] = n.asConstant();

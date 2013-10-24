@@ -30,10 +30,13 @@ import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.runtime.*;
 import com.oracle.graal.asm.*;
+import com.oracle.graal.phases.util.*;
+import com.oracle.graal.runtime.*;
 import com.oracle.graal.test.*;
 
 public abstract class AssemblerTest extends GraalTest {
 
+    private final MetaAccessProvider metaAccess;
     protected final CodeCacheProvider codeCache;
 
     public interface CodeGenTest {
@@ -42,12 +45,18 @@ public abstract class AssemblerTest extends GraalTest {
     }
 
     public AssemblerTest() {
-        this.codeCache = Graal.getRequiredCapability(CodeCacheProvider.class);
+        Providers providers = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getProviders();
+        this.metaAccess = providers.getMetaAccess();
+        this.codeCache = providers.getCodeCache();
+    }
+
+    public MetaAccessProvider getMetaAccess() {
+        return metaAccess;
     }
 
     protected InstalledCode assembleMethod(Method m, CodeGenTest test) {
-        ResolvedJavaMethod method = codeCache.lookupJavaMethod(m);
-        RegisterConfig registerConfig = codeCache.lookupRegisterConfig();
+        ResolvedJavaMethod method = getMetaAccess().lookupJavaMethod(m);
+        RegisterConfig registerConfig = codeCache.getRegisterConfig();
         CallingConvention cc = CodeUtil.getCallingConvention(codeCache, CallingConvention.Type.JavaCallee, method, false);
 
         CompilationResult compResult = new CompilationResult();
@@ -56,7 +65,7 @@ public abstract class AssemblerTest extends GraalTest {
 
         InstalledCode code = codeCache.addMethod(method, compResult);
 
-        DisassemblerProvider dis = Graal.getRuntime().getCapability(DisassemblerProvider.class);
+        DisassemblerProvider dis = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getDisassembler();
         if (dis != null) {
             String disasm = dis.disassemble(code);
             Assert.assertTrue(code.toString(), disasm == null || disasm.length() > 0);

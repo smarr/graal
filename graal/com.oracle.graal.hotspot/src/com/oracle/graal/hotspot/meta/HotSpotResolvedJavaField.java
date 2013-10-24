@@ -20,7 +20,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.graal.hotspot.meta;
 
 import static com.oracle.graal.api.meta.MetaUtil.*;
@@ -93,14 +92,13 @@ public class HotSpotResolvedJavaField extends CompilerObject implements Resolved
      * only called for snippets or replacements.
      */
     private static boolean isCalledForSnippets() {
-        HotSpotRuntime runtime = graalRuntime().getRuntime();
-
+        MetaAccessProvider metaAccess = runtime().getHostProviders().getMetaAccess();
         ResolvedJavaMethod makeGraphMethod = null;
         ResolvedJavaMethod initMethod = null;
         try {
             Class<?> rjm = ResolvedJavaMethod.class;
-            makeGraphMethod = runtime.lookupJavaMethod(ReplacementsImpl.class.getDeclaredMethod("makeGraph", rjm, rjm, SnippetInliningPolicy.class));
-            initMethod = runtime.lookupJavaMethod(SnippetTemplate.AbstractTemplates.class.getDeclaredMethod("template", Arguments.class));
+            makeGraphMethod = metaAccess.lookupJavaMethod(ReplacementsImpl.class.getDeclaredMethod("makeGraph", rjm, rjm, SnippetInliningPolicy.class, boolean.class));
+            initMethod = metaAccess.lookupJavaMethod(SnippetTemplate.AbstractTemplates.class.getDeclaredMethod("template", Arguments.class));
         } catch (NoSuchMethodException | SecurityException e) {
             throw new GraalInternalError(e);
         }
@@ -121,8 +119,8 @@ public class HotSpotResolvedJavaField extends CompilerObject implements Resolved
     private static final Set<ResolvedJavaField> notEmbeddable = new HashSet<>();
 
     private static void addResolvedToSet(Field field) {
-        HotSpotRuntime runtime = graalRuntime().getRuntime();
-        notEmbeddable.add(runtime.lookupJavaField(field));
+        MetaAccessProvider metaAccess = runtime().getHostProviders().getMetaAccess();
+        notEmbeddable.add(metaAccess.lookupJavaField(field));
     }
 
     static {
@@ -169,6 +167,12 @@ public class HotSpotResolvedJavaField extends CompilerObject implements Resolved
 
     private static final String SystemClassName = "Ljava/lang/System;";
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The {@code value} field in {@link OptionValue} is considered constant if the type of
+     * {@code receiver} is (assignable to) {@link StableOptionValue}.
+     */
     @Override
     public Constant readConstantValue(Constant receiver) {
         assert !AOTCompilation.getValue() || isCalledForSnippets() : receiver;
@@ -198,6 +202,7 @@ public class HotSpotResolvedJavaField extends CompilerObject implements Resolved
             } else {
                 Class<?> clazz = object.getClass();
                 if (StableOptionValue.class.isAssignableFrom(clazz)) {
+                    assert getName().equals("value") : "Unexpected field in " + StableOptionValue.class.getName() + " hierarchy:" + this;
                     StableOptionValue<?> option = (StableOptionValue<?>) object;
                     return Constant.forObject(option.getValue());
                 }
@@ -211,12 +216,12 @@ public class HotSpotResolvedJavaField extends CompilerObject implements Resolved
         if (receiver == null) {
             assert Modifier.isStatic(flags);
             if (holder.isInitialized()) {
-                return graalRuntime().getRuntime().readUnsafeConstant(getKind(), holder.mirror(), offset, getKind() == Kind.Object);
+                return runtime().getHostProviders().getConstantReflection().readUnsafeConstant(getKind(), holder.mirror(), offset, getKind() == Kind.Object);
             }
             return null;
         } else {
             assert !Modifier.isStatic(flags);
-            return graalRuntime().getRuntime().readUnsafeConstant(getKind(), receiver.asObject(), offset, getKind() == Kind.Object);
+            return runtime().getHostProviders().getConstantReflection().readUnsafeConstant(getKind(), receiver.asObject(), offset, getKind() == Kind.Object);
         }
     }
 

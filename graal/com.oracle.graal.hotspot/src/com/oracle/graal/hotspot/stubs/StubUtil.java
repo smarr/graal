@@ -22,7 +22,7 @@
  */
 package com.oracle.graal.hotspot.stubs;
 
-import static com.oracle.graal.api.code.DeoptimizationAction.*;
+import static com.oracle.graal.api.meta.DeoptimizationAction.*;
 import static com.oracle.graal.api.meta.DeoptimizationReason.*;
 import static com.oracle.graal.hotspot.HotSpotGraalRuntime.*;
 import static com.oracle.graal.hotspot.nodes.CStringNode.*;
@@ -87,7 +87,7 @@ public class StubUtil {
      */
     @Fold
     public static boolean cAssertionsEnabled() {
-        return graalRuntime().getConfig().cAssertions;
+        return runtime().getConfig().cAssertions;
     }
 
     @NodeIntrinsic(StubForeignCallNode.class)

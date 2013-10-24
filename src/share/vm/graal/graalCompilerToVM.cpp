@@ -22,10 +22,10 @@
  */
 
 #include "precompiled.hpp"
-#include "runtime/fieldDescriptor.hpp"
 #include "memory/oopFactory.hpp"
 #include "oops/generateOopMap.hpp"
 #include "oops/fieldStreams.hpp"
+#include "runtime/fieldDescriptor.hpp"
 #include "runtime/javaCalls.hpp"
 #include "graal/graalRuntime.hpp"
 #include "compiler/compileBroker.hpp"
@@ -509,16 +509,15 @@ C2V_VMENTRY(jobject, lookupFieldInPool, (JNIEnv *env, jobject, jobject constantP
   AccessFlags flags;
   BasicType basic_type;
   if (holder->klass() == SystemDictionary::HotSpotResolvedObjectType_klass()) {
-    FieldAccessInfo result;
-    LinkResolver::resolve_field(result, cp, cp_index,
-                                Bytecodes::java_code(code),
-                                true, false, Thread::current());
+    fieldDescriptor result;
+    LinkResolver::resolve_field_access(result, cp, cp_index, Bytecodes::java_code(code), true, false, Thread::current());
+
     if (HAS_PENDING_EXCEPTION) {
       CLEAR_PENDING_EXCEPTION;
     } else {
-      offset = result.field_offset();
+      offset = result.offset();
       flags = result.access_flags();
-      holder_klass = result.klass()();
+      holder_klass = result.field_holder();
       basic_type = result.field_type();
       holder = GraalCompiler::get_JavaType(holder_klass, CHECK_NULL);
     }
@@ -875,6 +874,9 @@ C2V_ENTRY(void, initializeConfiguration, (JNIEnv *env, jobject, jobject config))
 
   set_int("arrayClassElementOffset", in_bytes(ObjArrayKlass::element_klass_offset()));
 
+  set_int("graalCountersThreadOffset", in_bytes(JavaThread::graal_counters_offset()));
+  set_int("graalCountersSize", (jint) GRAAL_COUNTERS_SIZE);
+
 #undef set_boolean
 #undef set_int
 #undef set_long
@@ -1130,19 +1132,26 @@ C2V_VMENTRY(void, invalidateInstalledCode, (JNIEnv *env, jobject, jobject hotspo
     VM_Deoptimize op;
     VMThread::execute(&op);
   }
+  HotSpotInstalledCode::set_codeBlob(hotspotInstalledCode, 0);
 C2V_END
 
 
 C2V_VMENTRY(jobject, readUnsafeUncompressedPointer, (JNIEnv *env, jobject, jobject o, jlong offset))
   oop resolved_o = JNIHandles::resolve(o);
-  jlong address = offset + (jlong)resolved_o;
-  return JNIHandles::make_local(*((oop*)address));
+  address addr = offset + (address)resolved_o;
+  return JNIHandles::make_local(*((oop*)addr));
 C2V_END
 
 C2V_VMENTRY(jlong, readUnsafeKlassPointer, (JNIEnv *env, jobject, jobject o))
   oop resolved_o = JNIHandles::resolve(o);
   jlong klass = (jlong)(address)resolved_o->klass();
   return klass;
+C2V_END
+
+C2V_VMENTRY(jlongArray, collectCounters, (JNIEnv *env, jobject))
+  typeArrayOop arrayOop = oopFactory::new_longArray(GRAAL_COUNTERS_SIZE, CHECK_NULL);
+  JavaThread::collect_counters(arrayOop);
+  return (jlongArray) JNIHandles::make_local(arrayOop);
 C2V_END
 
 #define CC (char*)  /*cast a literal from (const char*)*/
@@ -1224,6 +1233,7 @@ JNINativeMethod CompilerToVM_methods[] = {
   {CC"invalidateInstalledCode",       CC"("HS_INSTALLED_CODE")V",                                       FN_PTR(invalidateInstalledCode)},
   {CC"readUnsafeUncompressedPointer", CC"("OBJECT"J)"OBJECT,                                            FN_PTR(readUnsafeUncompressedPointer)},
   {CC"readUnsafeKlassPointer",        CC"("OBJECT")J",                                                  FN_PTR(readUnsafeKlassPointer)},
+  {CC"collectCounters",               CC"()[J",                                                         FN_PTR(collectCounters)},
 };
 
 int CompilerToVM_methods_count() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -319,7 +319,7 @@ static DoNothingClosure do_nothing;
 static void add_derived_oop(oop* base, oop* derived) {
 #ifndef TIERED
   COMPILER1_PRESENT(ShouldNotReachHere();)
-  GRAAL_ONLY(ShouldNotReachHere();)
+  GRAALVM_ONLY(ShouldNotReachHere();)
 #endif // TIERED
 #ifdef COMPILER2
   DerivedPointerTable::add(derived, base);
@@ -381,7 +381,7 @@ void OopMapSet::all_do(const frame *fr, const RegisterMap *reg_map,
     if (!oms.is_done()) {
 #ifndef TIERED
       COMPILER1_PRESENT(ShouldNotReachHere();)
-      GRAAL_ONLY(ShouldNotReachHere();)
+      GRAALVM_ONLY(ShouldNotReachHere();)
 #endif // !TIERED
       // Protect the operation on the derived pointers.  This
       // protects the addition of derived pointers to the shared
@@ -523,7 +523,7 @@ void OopMapSet::update_register_map(const frame *fr, RegisterMap *reg_map) {
 bool OopMap::has_derived_pointer() const {
 #ifndef TIERED
   COMPILER1_PRESENT(return false);
-  GRAAL_ONLY(return false);
+  GRAALVM_ONLY(return false);
 #endif // !TIERED
 #ifdef COMPILER2
   OopMapStream oms((OopMap*)this,OopMapValue::derived_oop_value);
@@ -631,7 +631,7 @@ void DerivedPointerTable::clear() {
 
 
 // Returns value of location as an int
-intptr_t value_of_loc(oop *pointer) { return (intptr_t)(*pointer); }
+intptr_t value_of_loc(oop *pointer) { return cast_from_oop<intptr_t>((*pointer)); }
 
 
 void DerivedPointerTable::add(oop *derived_loc, oop *base_loc) {

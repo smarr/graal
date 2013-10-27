@@ -20,22 +20,14 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.graal.lir.amd64;
 
-import java.util.*;
+package com.oracle.graal.hotspot;
 
-import com.oracle.graal.api.code.*;
-import com.oracle.graal.lir.*;
+import java.lang.annotation.*;
 
-/**
- * Base class for operations that preserve a set of registers.
- */
-public abstract class AMD64RegistersPreservationOp extends AMD64LIRInstruction {
+// TODO remove this annotation after we moved to JDK 8 and use sun.invoke.Stable instead
 
-    /**
-     * Prunes the set of registers preserved by this operation to exclude those in {@code ignored}
-     * and updates {@code debugInfo} with a {@linkplain DebugInfo#getCalleeSaveInfo() description}
-     * of where each preserved register is saved.
-     */
-    public abstract void update(Set<Register> ignored, DebugInfo debugInfo, FrameMap frameMap);
+@Target(ElementType.FIELD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Stable {
 }

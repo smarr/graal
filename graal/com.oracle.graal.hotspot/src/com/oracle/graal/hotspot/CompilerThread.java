@@ -50,16 +50,16 @@ public final class CompilerThread extends Thread {
 
     @Override
     public void run() {
-        GraalDebugConfig hotspotDebugConfig = null;
+        GraalDebugConfig debugConfig = null;
         if (Debug.isEnabled()) {
             PrintStream log = runtime().getVMToCompiler().log();
-            DebugEnvironment.initialize(log);
+            debugConfig = DebugEnvironment.initialize(log);
         }
         try {
             super.run();
         } finally {
-            if (hotspotDebugConfig != null) {
-                for (DebugDumpHandler dumpHandler : hotspotDebugConfig.dumpHandlers()) {
+            if (debugConfig != null) {
+                for (DebugDumpHandler dumpHandler : debugConfig.dumpHandlers()) {
                     try {
                         dumpHandler.close();
                     } catch (Throwable t) {

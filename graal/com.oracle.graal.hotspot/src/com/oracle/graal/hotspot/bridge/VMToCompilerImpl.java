@@ -28,7 +28,6 @@ import static com.oracle.graal.graph.UnsafeAccess.*;
 import static com.oracle.graal.hotspot.CompilationTask.*;
 import static com.oracle.graal.hotspot.HotSpotGraalRuntime.*;
 import static com.oracle.graal.java.GraphBuilderPhase.*;
-import static com.oracle.graal.phases.GraalOptions.*;
 import static com.oracle.graal.phases.common.InliningUtil.*;
 
 import java.io.*;
@@ -39,6 +38,8 @@ import java.util.concurrent.atomic.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
+import com.oracle.graal.compiler.*;
+import com.oracle.graal.compiler.CompilerThreadFactory.DebugConfigAccess;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.debug.internal.*;
 import com.oracle.graal.graph.*;
@@ -192,7 +193,12 @@ public class VMToCompilerImpl implements VMToCompiler {
         }
 
         // Create compilation queue.
-        compileQueue = new ThreadPoolExecutor(Threads.getValue(), Threads.getValue(), 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), CompilerThread.FACTORY);
+        CompilerThreadFactory factory = new CompilerThreadFactory("GraalCompilerThread", new DebugConfigAccess() {
+            public GraalDebugConfig getDebugConfig() {
+                return Debug.isEnabled() ? DebugEnvironment.initialize(log) : null;
+            }
+        });
+        compileQueue = new ThreadPoolExecutor(Threads.getValue(), Threads.getValue(), 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), factory);
 
         // Create queue status printing thread.
         if (PrintQueue.getValue()) {
@@ -327,11 +333,11 @@ public class VMToCompilerImpl implements VMToCompiler {
         }
         System.gc();
         phaseTransition("bootstrap2");
+    }
 
-        if (CompileTheWorld.getValue() != null) {
-            new CompileTheWorld().compile();
-            System.exit(0);
-        }
+    public void compileTheWorld() throws Throwable {
+        new CompileTheWorld().compile();
+        System.exit(0);
     }
 
     private MetricRateInPhase parsedBytecodesPerSecond;

@@ -35,6 +35,7 @@ import com.oracle.graal.api.code.CallingConvention.Type;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.runtime.*;
 import com.oracle.graal.compiler.*;
+import com.oracle.graal.compiler.CompilerThreadFactory.*;
 import com.oracle.graal.compiler.target.*;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.debug.internal.*;
@@ -81,7 +82,12 @@ public class TruffleCompilerImpl implements TruffleCompiler {
         this.skippedExceptionTypes = getSkippedExceptionTypes(providers.getMetaAccess());
 
         // Create compilation queue.
-        compileQueue = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), TruffleCompilerThread.FACTORY);
+        CompilerThreadFactory factory = new CompilerThreadFactory("TruffleCompilerThread", new DebugConfigAccess() {
+            public GraalDebugConfig getDebugConfig() {
+                return Debug.isEnabled() ? DebugEnvironment.initialize(TTY.out().out()) : null;
+            }
+        });
+        compileQueue = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), factory);
 
         final GraphBuilderConfiguration config = GraphBuilderConfiguration.getEagerDefault();
         config.setSkippedExceptionTypes(skippedExceptionTypes);
@@ -211,7 +217,7 @@ public class TruffleCompilerImpl implements TruffleCompiler {
             @Override
             public CompilationResult call() {
                 try (TimerCloseable a = CompilationTime.start()) {
-                    return Debug.scope("GraalCompiler", new Object[]{providers.getCodeCache()}, new Callable<CompilationResult>() {
+                    return Debug.scope("GraalCompiler", new Object[]{graph, providers.getCodeCache()}, new Callable<CompilationResult>() {
                         public CompilationResult call() {
                             CodeCacheProvider codeCache = providers.getCodeCache();
                             CallingConvention cc = getCallingConvention(codeCache, Type.JavaCallee, graph.method(), false);

@@ -27,12 +27,20 @@ package com.oracle.graal.compiler.hsail.test.infra;
  * This class extends KernelTester and provides a base class
  * for which the HSAIL code comes from the Graal compiler.
  */
-import com.oracle.graal.hotspot.hsail.*;
-
-import java.lang.reflect.Method;
-import java.io.*;
-
 import static com.oracle.graal.phases.GraalOptions.*;
+
+import java.io.*;
+import java.lang.reflect.*;
+
+import com.oracle.graal.api.code.*;
+import com.oracle.graal.debug.*;
+import com.oracle.graal.graph.*;
+import com.oracle.graal.hotspot.hsail.*;
+import com.oracle.graal.hotspot.meta.*;
+import com.oracle.graal.options.*;
+
+import com.oracle.graal.phases.GraalOptions;
+import static com.oracle.graal.options.OptionValue.OverrideScope;
 
 public abstract class GraalKernelTester extends KernelTester {
 
@@ -41,9 +49,9 @@ public abstract class GraalKernelTester extends KernelTester {
     private boolean saveInFile = false;
 
     @Override
-    public String getCompiledHSAILSource(Method testMethod) {
+    public String getCompiledHSAILSource(Method method) {
         if (hsailCompResult == null) {
-            hsailCompResult = HSAILCompilationResult.getHSAILCompilationResult(testMethod);
+            hsailCompResult = HSAILCompilationResult.getHSAILCompilationResult(method);
         }
         String hsailSource = hsailCompResult.getHSAILCode();
         if (showHsailSource) {
@@ -75,4 +83,50 @@ public abstract class GraalKernelTester extends KernelTester {
         boolean canExecuteCalls = runningOnSimulator();
         return (canGenerateCalls && canExecuteCalls);
     }
+
+    @Override
+    protected void dispatchKernelOkra(int range, Object... args) {
+        HSAILCompilationResult hcr = HSAILCompilationResult.getHSAILCompilationResult(testMethod);
+        HotSpotNmethod code = (HotSpotNmethod) hcr.getInstalledCode();
+
+        if (code != null) {
+            try {
+                code.executeParallel(range, 0, 0, args);
+            } catch (InvalidInstalledCodeException e) {
+                Debug.log("WARNING:Invalid installed code: " + e);
+                e.printStackTrace();
+            }
+        } else {
+            super.dispatchKernelOkra(range, args);
+        }
+    }
+
+    public static OptionValue<?> getOptionFromField(Class declaringClass, String fieldName) {
+        try {
+            Field f = declaringClass.getDeclaredField(fieldName);
+            f.setAccessible(true);
+            return (OptionValue<?>) f.get(null);
+        } catch (Exception e) {
+            throw new GraalInternalError(e);
+        }
+    }
+
+    private OptionValue<?> accessibleRemoveNeverExecutedCode = getOptionFromField(GraalOptions.class, "RemoveNeverExecutedCode");
+
+    // Special overrides for the testGeneratedxxx routines which set
+    // required graal options that we need to run any junit test
+    @Override
+    public void testGeneratedHsail() {
+        try (OverrideScope s = OptionValue.override(GraalOptions.InlineEverything, true, accessibleRemoveNeverExecutedCode, false)) {
+            super.testGeneratedHsail();
+        }
+    }
+
+    @Override
+    public void testGeneratedHsailUsingLambdaMethod() {
+        try (OverrideScope s = OptionValue.override(GraalOptions.InlineEverything, true, accessibleRemoveNeverExecutedCode, false)) {
+            super.testGeneratedHsailUsingLambdaMethod();
+        }
+    }
+
 }

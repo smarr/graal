@@ -246,7 +246,9 @@ flags.make: $(BUILDTREE_MAKE) ../shared_dirs.lst
 	echo "$(call gamma-path,altsrc,os/posix/vm) \\"; \
 	echo "$(call gamma-path,commonsrc,os/posix/vm) \\"; \
 	echo "$(call gamma-path,altsrc,gpu/ptx/vm) \\"; \
-	echo "$(call gamma-path,commonsrc,gpu/ptx/vm)"; \
+	echo "$(call gamma-path,commonsrc,gpu/ptx/vm)" \\; \
+	echo "$(call gamma-path,altsrc,gpu/hsail/vm) \\"; \
+	echo "$(call gamma-path,commonsrc,gpu/hsail/vm)"; \
 	echo; \
 	echo "Src_Dirs_I = \\"; \
 	echo "$(call gamma-path,altsrc,share/vm/prims) \\"; \
@@ -269,6 +271,16 @@ flags.make: $(BUILDTREE_MAKE) ../shared_dirs.lst
 	echo "$(call gamma-path,commonsrc,gpu)"; \
 	[ -n "$(CFLAGS_BROWSE)" ] && \
 	    echo && echo "CFLAGS_BROWSE = $(CFLAGS_BROWSE)"; \
+	[ -n "$(ENABLE_FULL_DEBUG_SYMBOLS)" ] && \
+	    echo && echo "ENABLE_FULL_DEBUG_SYMBOLS = $(ENABLE_FULL_DEBUG_SYMBOLS)"; \
+	[ -n "$(OBJCOPY)" ] && \
+	    echo && echo "OBJCOPY = $(OBJCOPY)"; \
+	[ -n "$(STRIP_POLICY)" ] && \
+	    echo && echo "STRIP_POLICY = $(STRIP_POLICY)"; \
+	[ -n "$(ZIP_DEBUGINFO_FILES)" ] && \
+	    echo && echo "ZIP_DEBUGINFO_FILES = $(ZIP_DEBUGINFO_FILES)"; \
+	[ -n "$(ZIPEXE)" ] && \
+	    echo && echo "ZIPEXE = $(ZIPEXE)"; \
 	[ -n "$(HOTSPOT_EXTRA_SYSDEFS)" ] && \
 	    echo && \
 	    echo "HOTSPOT_EXTRA_SYSDEFS\$$(HOTSPOT_EXTRA_SYSDEFS) = $(HOTSPOT_EXTRA_SYSDEFS)" && \

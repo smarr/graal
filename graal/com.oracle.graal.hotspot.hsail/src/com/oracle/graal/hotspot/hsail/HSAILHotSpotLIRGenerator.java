@@ -23,6 +23,8 @@
 
 package com.oracle.graal.hotspot.hsail;
 
+import sun.misc.*;
+
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.compiler.hsail.*;
@@ -32,6 +34,8 @@ import com.oracle.graal.lir.hsail.*;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.*;
 import com.oracle.graal.lir.hsail.HSAILMove.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.calc.*;
+import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.phases.util.*;
 
 /**
@@ -46,8 +50,67 @@ public class HSAILHotSpotLIRGenerator extends HSAILLIRGenerator {
         this.config = config;
     }
 
+    private int getLogMinObjectAlignment() {
+        return config.logMinObjAlignment();
+    }
+
+    private int getNarrowOopShift() {
+        return config.narrowOopShift;
+    }
+
+    private long getNarrowOopBase() {
+        return config.narrowOopBase;
+    }
+
+    private int getLogKlassAlignment() {
+        return config.logKlassAlignment;
+    }
+
+    private int getNarrowKlassShift() {
+        return config.narrowKlassShift;
+    }
+
+    private long getNarrowKlassBase() {
+        return config.narrowKlassBase;
+    }
+
     private static boolean isCompressCandidate(DeoptimizingNode access) {
         return access != null && ((HeapAccess) access).isCompressible();
+    }
+
+    /**
+     * Appends either a {@link CompareAndSwapOp} or a {@link CompareAndSwapCompressedOp} depending
+     * on whether the memory location of a given {@link LoweredCompareAndSwapNode} contains a
+     * compressed oop. For the {@link CompareAndSwapCompressedOp} case, allocates a number of
+     * scratch registers. The result {@link #operand(ValueNode) operand} for {@code node} complies
+     * with the API for {@link Unsafe#compareAndSwapInt(Object, long, int, int)}.
+     * 
+     * @param address the memory location targeted by the operation
+     */
+    @Override
+    public void visitCompareAndSwap(LoweredCompareAndSwapNode node, Value address) {
+        Kind kind = node.getNewValue().kind();
+        assert kind == node.getExpectedValue().kind();
+        Variable expected = load(operand(node.getExpectedValue()));
+        Variable newValue = load(operand(node.getNewValue()));
+        HSAILAddressValue addressValue = asAddressValue(address);
+        Variable casResult = newVariable(kind);
+        if (config.useCompressedOops && node.isCompressible()) {
+            // make 64-bit scratch variables for expected and new
+            Variable scratchExpected64 = newVariable(Kind.Long);
+            Variable scratchNewValue64 = newVariable(Kind.Long);
+            // make 32-bit scratch variables for expected and new and result
+            Variable scratchExpected32 = newVariable(Kind.Int);
+            Variable scratchNewValue32 = newVariable(Kind.Int);
+            Variable scratchCasResult32 = newVariable(Kind.Int);
+            append(new CompareAndSwapCompressedOp(casResult, addressValue, expected, newValue, scratchExpected64, scratchNewValue64, scratchExpected32, scratchNewValue32, scratchCasResult32,
+                            getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment()));
+        } else {
+            append(new CompareAndSwapOp(casResult, addressValue, expected, newValue));
+        }
+        Variable nodeResult = newVariable(node.kind());
+        append(new CondMoveOp(mapKindToCompareOp(kind), casResult, expected, nodeResult, Condition.EQ, Constant.INT_1, Constant.INT_0));
+        setResult(node, nodeResult);
     }
 
     @Override
@@ -56,9 +119,12 @@ public class HSAILHotSpotLIRGenerator extends HSAILLIRGenerator {
         Variable result = newVariable(kind);
         LIRFrameState state = access != null ? state(access) : null;
         assert access == null || access instanceof HeapAccess;
-        if (config.useCompressedOops && isCompressCandidate(access)) {
+        if (isCompressCandidate(access) && config.useCompressedOops && kind == Kind.Object) {
             Variable scratch = newVariable(Kind.Long);
-            append(new LoadCompressedPointer(kind, result, scratch, loadAddress, state, config.narrowOopBase, config.narrowOopShift, config.logMinObjAlignment()));
+            append(new LoadCompressedPointer(kind, result, scratch, loadAddress, state, getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment()));
+        } else if (isCompressCandidate(access) && config.useCompressedClassPointers && kind == Kind.Long) {
+            Variable scratch = newVariable(Kind.Long);
+            append(new LoadCompressedPointer(kind, result, scratch, loadAddress, state, getNarrowKlassBase(), getNarrowKlassShift(), getLogKlassAlignment()));
         } else {
             append(new LoadOp(kind, result, loadAddress, state));
         }
@@ -70,9 +136,12 @@ public class HSAILHotSpotLIRGenerator extends HSAILLIRGenerator {
         HSAILAddressValue storeAddress = asAddressValue(address);
         LIRFrameState state = access != null ? state(access) : null;
         Variable input = load(inputVal);
-        if (config.useCompressedOops && isCompressCandidate(access)) {
+        if (isCompressCandidate(access) && config.useCompressedOops && kind == Kind.Object) {
             Variable scratch = newVariable(Kind.Long);
-            append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, config.narrowOopBase, config.narrowOopShift, config.logMinObjAlignment()));
+            append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment()));
+        } else if (isCompressCandidate(access) && config.useCompressedClassPointers && kind == Kind.Long) {
+            Variable scratch = newVariable(Kind.Long);
+            append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, getNarrowKlassBase(), getNarrowKlassShift(), getLogKlassAlignment()));
         } else {
             append(new StoreOp(kind, storeAddress, input, state));
         }

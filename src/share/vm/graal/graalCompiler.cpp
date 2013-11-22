@@ -82,6 +82,9 @@ void GraalCompiler::initialize() {
 
   graal_compute_offsets();
 
+  // Ensure _non_oop_bits is initialized
+  Universe::non_oop_word();
+
   {
     GRAAL_VM_ENTRY_MARK;
     HandleMark hm;
@@ -95,7 +98,7 @@ void GraalCompiler::initialize() {
         vm_abort(false);
       }
     }
-    VMToCompiler::finalizeOptions(CITime);
+    VMToCompiler::finalizeOptions(CITime || CITimeEach);
 
     if (UseCompiler) {
       bool bootstrap = GRAALVM_ONLY(BootstrapGraal) NOT_GRAALVM(false);
@@ -179,10 +182,11 @@ void GraalCompiler::compile_method(methodHandle method, int entry_bci, jboolean 
 
   assert(_initialized, "must already be initialized");
   ResourceMark rm;
-  JavaThread::current()->set_is_compiling(true);
+  thread->set_is_graal_compiling(true);
   Handle holder = GraalCompiler::createHotSpotResolvedObjectType(method, CHECK);
+  check_pending_exception("Error while calling createHotSpotResolvedObjectType");
   VMToCompiler::compileMethod(method(), holder, entry_bci, blocking);
-  JavaThread::current()->set_is_compiling(false);
+  thread->set_is_graal_compiling(false);
 }
 
 // Compilation entry point for methods
@@ -233,8 +237,7 @@ Handle GraalCompiler::get_JavaType(constantPoolHandle cp, int index, KlassHandle
       // We have to lock the cpool to keep the oop from being resolved
       // while we are accessing it. But we must release the lock before
       // calling up into Java.
-      oop cplock = cp->lock();
-      ObjectLocker ol(cplock, THREAD, cplock != NULL);
+      MonitorLockerEx ml(cp->lock());
       constantTag tag = cp->tag_at(index);
       if (tag.is_klass()) {
         // The klass has been inserted into the constant pool

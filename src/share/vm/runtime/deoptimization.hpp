@@ -102,8 +102,10 @@ class Deoptimization : AllStatic {
   enum {
     _action_bits = 3,
     _reason_bits = 5,
+    _speculation_id_bits = 23,
     _action_shift = 0,
     _reason_shift = _action_shift+_action_bits,
+    _speculation_id_shift = _reason_shift+_reason_bits,
     BC_CASE_LIMIT = PRODUCT_ONLY(1) NOT_PRODUCT(4) // for _deoptimization_hist
   };
 
@@ -150,6 +152,7 @@ class Deoptimization : AllStatic {
   // UnrollBlock is returned by fetch_unroll_info() to the deoptimization handler (blob).
   // This is only a CheapObj to ease debugging after a deopt failure
   class UnrollBlock : public CHeapObj<mtCompiler> {
+    friend class VMStructs;
    private:
     int       _size_of_deoptimized_frame; // Size, in bytes, of current deoptimized frame
     int       _caller_adjustment;         // Adjustment, in bytes, to caller's SP by initial interpreted frame
@@ -286,6 +289,14 @@ class Deoptimization : AllStatic {
       // standard action for unloaded CP entry
       return _unloaded_action;
   }
+  static short trap_request_speculation_id(int trap_request) {
+      if (trap_request < 0)
+        return (DeoptAction)
+          ((~(trap_request) >> _speculation_id_shift) & right_n_bits(_speculation_id_bits));
+      else
+        // standard action for unloaded CP entry
+        return 0;
+    }
   static int trap_request_index(int trap_request) {
     if (trap_request < 0)
       return -1;

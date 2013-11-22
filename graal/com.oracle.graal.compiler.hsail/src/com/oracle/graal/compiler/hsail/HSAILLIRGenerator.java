@@ -37,6 +37,7 @@ import com.oracle.graal.graph.*;
 import com.oracle.graal.lir.*;
 import com.oracle.graal.lir.StandardOp.JumpOp;
 import com.oracle.graal.lir.hsail.*;
+import com.oracle.graal.lir.hsail.HSAILArithmetic.ConvertOp;
 import com.oracle.graal.lir.hsail.HSAILArithmetic.Op1Stack;
 import com.oracle.graal.lir.hsail.HSAILArithmetic.Op2Reg;
 import com.oracle.graal.lir.hsail.HSAILArithmetic.Op2Stack;
@@ -46,12 +47,14 @@ import com.oracle.graal.lir.hsail.HSAILControlFlow.CondMoveOp;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.FloatCompareBranchOp;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.FloatCondMoveOp;
 import com.oracle.graal.lir.hsail.HSAILControlFlow.ReturnOp;
+import com.oracle.graal.lir.hsail.HSAILControlFlow.SwitchOp;
 import com.oracle.graal.lir.hsail.HSAILMove.LeaOp;
+import com.oracle.graal.lir.hsail.HSAILMove.MembarOp;
 import com.oracle.graal.lir.hsail.HSAILMove.MoveFromRegOp;
 import com.oracle.graal.lir.hsail.HSAILMove.MoveToRegOp;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
-import com.oracle.graal.nodes.java.*;
+import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.phases.util.*;
 
 /**
@@ -170,7 +173,7 @@ public abstract class HSAILLIRGenerator extends LIRGenerator {
         append(new JumpOp(label));
     }
 
-    private static HSAILCompare mapKindToCompareOp(Kind kind) {
+    protected static HSAILCompare mapKindToCompareOp(Kind kind) {
         switch (kind) {
             case Int:
                 return ICMP;
@@ -612,7 +615,8 @@ public abstract class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     public void emitMembar(int barriers) {
-        throw GraalInternalError.unimplemented();
+        int necessaryBarriers = target().arch.requiredBarriers(barriers);
+        append(new MembarOp(necessaryBarriers));
     }
 
     @Override
@@ -686,9 +690,61 @@ public abstract class HSAILLIRGenerator extends LIRGenerator {
         append(new ReturnOp(input));
     }
 
+    /**
+     * This routine handles the LIR code generation for switch nodes by calling
+     * emitSequentialSwitch.
+     * 
+     * This routine overrides LIRGenerator.emitSwitch( ) which calls emitSequentialSwitch or
+     * emitTableSwitch based on a heuristic.
+     * 
+     * The recommended approach in HSAIL for generating performant code for switch statements is to
+     * emit a series of cascading compare and branches. Thus this routines always calls
+     * emitSequentialSwitch, which implements this approach.
+     * 
+     * Note: Only IntegerSwitchNodes are currently supported. The IntegerSwitchNode is the node that
+     * Graal generates for any switch construct appearing in Java bytecode.
+     * 
+     * @param x the SwitchNode
+     */
+    @Override
+    public void emitSwitch(SwitchNode x) {
+        // get the key of the switch.
+        Variable key = load(operand(x.value()));
+        // set the default target.
+        LabelRef defaultTarget = x.defaultSuccessor() == null ? null : getLIRBlock(x.defaultSuccessor());
+        // emit a sequential switch for the specified key and default target.
+        emitSequentialSwitch(x, key, defaultTarget);
+    }
+
+    /**
+     * Generates the LIR instruction for a switch construct that is meant to be assembled into a
+     * series of cascading compare and branch instructions. This is currently the recommended way of
+     * generating performant HSAIL code for switch constructs.
+     * 
+     * In Java bytecode the keys for switch statements are always ints.
+     * 
+     * The x86 backend also adds support for handling keys of type long or Object but these two
+     * special cases are for handling the TypeSwitchNode, which is a node that the JVM produces for
+     * handling operations related to method dispatch. We haven't yet added support for the
+     * TypeSwitchNode, so for the time being we have added a check to ensure that the keys are of
+     * type int. This also allows us to flag any test cases/execution paths that may trigger the
+     * creation fo a TypeSwitchNode which we don't support yet.
+     * 
+     * 
+     * @param keyConstants array of key constants used for the case statements.
+     * @param keyTargets array of branch targets for each of the cases.
+     * @param defaultTarget the branch target for the default case.
+     * @param key the key that is compared against the key constants in the case statements.
+     */
     @Override
     protected void emitSequentialSwitch(Constant[] keyConstants, LabelRef[] keyTargets, LabelRef defaultTarget, Value key) {
-        throw GraalInternalError.unimplemented();
+        if (key.getKind() == Kind.Int) {
+            // Append the LIR instruction for generating compare and branch instructions.
+            append(new SwitchOp(keyConstants, keyTargets, defaultTarget, key));
+        } else {
+            // Throw an exception if the keys aren't ints.
+            throw GraalInternalError.unimplemented("Switch statements are only supported for keys of type int");
+        }
     }
 
     @Override
@@ -698,11 +754,6 @@ public abstract class HSAILLIRGenerator extends LIRGenerator {
 
     @Override
     protected void emitTableSwitch(int lowKey, LabelRef defaultTarget, LabelRef[] targets, Value key) {
-        throw GraalInternalError.unimplemented();
-    }
-
-    @Override
-    public void visitCompareAndSwap(LoweredCompareAndSwapNode node, Value address) {
         throw GraalInternalError.unimplemented();
     }
 

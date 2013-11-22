@@ -648,6 +648,7 @@ public class HotSpotVMConfig extends CompilerObject {
     @HotSpotVMFlag(name = "CodeEntryAlignment") @Stable public int codeEntryAlignment;
     @HotSpotVMFlag(name = "VerifyOops") @Stable public boolean verifyOops;
     @HotSpotVMFlag(name = "CITime") @Stable public boolean ciTime;
+    @HotSpotVMFlag(name = "CITimeEach", optional = true) @Stable public boolean ciTimeEach;
     @HotSpotVMFlag(name = "CompileThreshold") @Stable public long compileThreshold;
     @HotSpotVMFlag(name = "CompileTheWorld") @Stable public boolean compileTheWorld;
     @HotSpotVMFlag(name = "CompileTheWorldStartAt") @Stable public int compileTheWorldStartAt;
@@ -671,6 +672,7 @@ public class HotSpotVMConfig extends CompilerObject {
     }
 
     @HotSpotVMFlag(name = "GraalDeferredInitBarriers") @Stable public boolean useDeferredInitBarriers;
+    @HotSpotVMFlag(name = "GraalHProfEnabled") @Stable public boolean useHeapProfiler;
 
     // Compressed Oops related values.
     @HotSpotVMFlag(name = "UseCompressedOops") @Stable public boolean useCompressedOops;

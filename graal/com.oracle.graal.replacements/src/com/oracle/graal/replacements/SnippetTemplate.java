@@ -398,7 +398,9 @@ public class SnippetTemplate {
                 }
             }
             assert found != null : "did not find @" + Snippet.class.getSimpleName() + " method in " + declaringClass + (methodName == null ? "" : " named " + methodName);
-            return new SnippetInfo(providers.getMetaAccess().lookupJavaMethod(found));
+            ResolvedJavaMethod javaMethod = providers.getMetaAccess().lookupJavaMethod(found);
+            providers.getReplacements().registerSnippet(javaMethod);
+            return new SnippetInfo(javaMethod);
         }
 
         /**
@@ -512,12 +514,8 @@ public class SnippetTemplate {
 
         Debug.dump(snippetCopy, "Before specialization");
         if (!nodeReplacements.isEmpty()) {
-            // Do deferred intrinsification of node intrinsics
-            new CanonicalizerPhase(true).apply(snippetCopy, phaseContext);
-            new NodeIntrinsificationPhase(providers).apply(snippetCopy);
-            new CanonicalizerPhase(true).apply(snippetCopy, phaseContext);
+            providers.getReplacements().prepareSnippetCopyAfterInstantiation(snippetCopy);
         }
-        NodeIntrinsificationVerificationPhase.verify(snippetCopy);
 
         // Gather the template parameters
         parameters = new Object[parameterCount];
@@ -856,25 +854,43 @@ public class SnippetTemplate {
      */
     public static final UsageReplacer DEFAULT_REPLACER = new UsageReplacer() {
 
+        private LocationIdentity getLocationIdentity(Node node) {
+            if (node instanceof MemoryAccess) {
+                return ((MemoryAccess) node).getLocationIdentity();
+            } else if (node instanceof MemoryProxy) {
+                return ((MemoryProxy) node).getLocationIdentity();
+            } else if (node instanceof MemoryPhiNode) {
+                return ((MemoryPhiNode) node).getLocationIdentity();
+            } else {
+                return null;
+            }
+        }
+
         @Override
         public void replace(ValueNode oldNode, ValueNode newNode, MemoryMapNode mmap) {
-            oldNode.replaceAtUsages(newNode);
-            if (mmap == null || newNode == null) {
-                return;
-            }
-            for (Node usage : newNode.usages().snapshot()) {
-                if (usage instanceof FloatingReadNode && ((FloatingReadNode) usage).getLastLocationAccess() == newNode) {
-                    assert newNode.graph().isAfterFloatingReadPhase();
+            if (mmap != null && newNode != null) {
+                for (Node usage : oldNode.usages().snapshot()) {
+                    LocationIdentity identity = getLocationIdentity(usage);
+                    if (identity != null && identity != LocationIdentity.FINAL_LOCATION) {
+                        // lastLocationAccess points into the snippet graph. find a proper
+                        // MemoryCheckPoint inside the snippet graph
+                        MemoryNode lastAccess = mmap.getLastLocationAccess(identity);
 
-                    // lastLocationAccess points into the snippet graph. find a proper
-                    // MemoryCheckPoint inside the snippet graph
-                    FloatingReadNode read = (FloatingReadNode) usage;
-                    Node lastAccess = mmap.getLastLocationAccess(read.location().getLocationIdentity());
-
-                    assert lastAccess != null : "no mapping found for lowerable node " + oldNode + ". (No node in the snippet kill the same location as the lowerable node?)";
-                    read.setLastLocationAccess(lastAccess);
+                        assert lastAccess != null : "no mapping found for lowerable node " + oldNode + ". (No node in the snippet kill the same location as the lowerable node?)";
+                        if (usage instanceof MemoryAccess) {
+                            MemoryAccess access = (MemoryAccess) usage;
+                            if (access.getLastLocationAccess() == oldNode) {
+                                assert newNode.graph().isAfterFloatingReadPhase();
+                                access.setLastLocationAccess(lastAccess);
+                            }
+                        } else {
+                            assert usage instanceof MemoryProxy || usage instanceof MemoryPhiNode;
+                            usage.replaceFirstInput(oldNode, lastAccess.asNode());
+                        }
+                    }
                 }
             }
+            oldNode.replaceAtUsages(newNode);
         }
     };
 
@@ -926,8 +942,8 @@ public class SnippetTemplate {
 
     private class DuplicateMapper extends MemoryMapNode {
 
-        Map<Node, Node> duplicates;
-        StartNode replaceeStart;
+        private final Map<Node, Node> duplicates;
+        @Input private StartNode replaceeStart;
 
         public DuplicateMapper(Map<Node, Node> duplicates, StartNode replaceeStart) {
             this.duplicates = duplicates;
@@ -935,14 +951,14 @@ public class SnippetTemplate {
         }
 
         @Override
-        public Node getLastLocationAccess(LocationIdentity locationIdentity) {
+        public MemoryNode getLastLocationAccess(LocationIdentity locationIdentity) {
             assert memoryMap != null : "no memory map stored for this snippet graph (snippet doesn't have a ReturnNode?)";
-            Node lastLocationAccess = memoryMap.getLastLocationAccess(locationIdentity);
+            MemoryNode lastLocationAccess = memoryMap.getLastLocationAccess(locationIdentity);
             assert lastLocationAccess != null;
             if (lastLocationAccess instanceof StartNode) {
                 return replaceeStart;
             } else {
-                return duplicates.get(lastLocationAccess);
+                return (MemoryNode) duplicates.get(ValueNodeUtil.asNode(lastLocationAccess));
             }
         }
     }
@@ -1005,7 +1021,7 @@ public class SnippetTemplate {
 
             // Replace all usages of the replacee with the value returned by the snippet
             ValueNode returnValue = null;
-            if (returnNode != null) {
+            if (returnNode != null && !(replacee instanceof ControlSinkNode)) {
                 if (returnNode.result() instanceof LocalNode) {
                     returnValue = (ValueNode) replacements.get(returnNode.result());
                 } else if (returnNode.result() != null) {

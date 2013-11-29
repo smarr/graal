@@ -28,7 +28,7 @@ import java.util.concurrent.*;
 
 import com.oracle.graal.debug.*;
 
-public final class DebugScope {
+public final class DebugScope implements AutoCloseable {
 
     private final class IndentImpl implements Indent {
 
@@ -75,7 +75,7 @@ public final class DebugScope {
         }
 
         @Override
-        public Indent logIndent(String msg, Object... args) {
+        public Indent logAndIndent(String msg, Object... args) {
             log(msg, args);
             return indent();
         }
@@ -87,6 +87,11 @@ public final class DebugScope {
             }
             return lastUsedIndent;
         }
+
+        @Override
+        public void close() {
+            outdent();
+        }
     }
 
     private static ThreadLocal<DebugScope> instanceTL = new ThreadLocal<>();
@@ -94,6 +99,8 @@ public final class DebugScope {
     private static ThreadLocal<Throwable> lastExceptionThrownTL = new ThreadLocal<>();
 
     private final DebugScope parent;
+    private final DebugConfig parentConfig;
+    private final boolean sandbox;
     private IndentImpl lastUsedIndent;
     private boolean logScopeName;
 
@@ -113,7 +120,7 @@ public final class DebugScope {
     public static DebugScope getInstance() {
         DebugScope result = instanceTL.get();
         if (result == null) {
-            DebugScope topLevelDebugScope = new DebugScope(Thread.currentThread().getName(), "", null);
+            DebugScope topLevelDebugScope = new DebugScope(Thread.currentThread().getName(), "", null, false);
             instanceTL.set(topLevelDebugScope);
             DebugValueMap.registerTopLevel(topLevelDebugScope.getValueMap());
             return topLevelDebugScope;
@@ -126,8 +133,10 @@ public final class DebugScope {
         return configTL.get();
     }
 
-    private DebugScope(String name, String qualifiedName, DebugScope parent, Object... context) {
+    private DebugScope(String name, String qualifiedName, DebugScope parent, boolean sandbox, Object... context) {
         this.parent = parent;
+        this.sandbox = sandbox;
+        this.parentConfig = getConfig();
         this.context = context;
         this.qualifiedName = qualifiedName;
         if (parent != null) {
@@ -155,6 +164,12 @@ public final class DebugScope {
         } else {
             this.valueMap = new DebugValueMap(name);
         }
+    }
+
+    public void close() {
+        context = null;
+        instanceTL.set(parent);
+        setConfig(parentConfig);
     }
 
     public boolean isDumpEnabled() {
@@ -222,33 +237,28 @@ public final class DebugScope {
      * @param newName the name of the new scope
      * @param runnable the task to run (must be null iff {@code callable} is not null)
      * @param callable the task to run (must be null iff {@code runnable} is not null)
-     * @param sandbox specifies if the scope is a child of the current scope or a top level scope
-     * @param sandboxConfig the config to use of a new top level scope (ignored if
-     *            {@code sandbox == false})
+     * @param sandboxConfig if non-null, a new top level scope is entered with this configuration
      * @param newContext context objects of the new scope
      * @return the value returned by the task
      */
-    public <T> T scope(String newName, Runnable runnable, Callable<T> callable, boolean sandbox, DebugConfig sandboxConfig, Object[] newContext) {
-        DebugScope oldContext = getInstance();
-        DebugConfig oldConfig = getConfig();
-        boolean oldLogEnabled = oldContext.isLogEnabled();
-        DebugScope newChild = null;
-        if (sandbox) {
-            newChild = new DebugScope(newName, newName, null, newContext);
+    public <T> T scope(String newName, Runnable runnable, Callable<T> callable, DebugConfig sandboxConfig, Object[] newContext) {
+        try (DebugScope s = openScope(newName, sandboxConfig, newContext)) {
+            return executeScope(runnable, callable);
+        }
+    }
+
+    public DebugScope openScope(String newName, DebugConfig sandboxConfig, Object... newContext) {
+        DebugScope newScope = null;
+        if (sandboxConfig != null) {
+            newScope = new DebugScope(newName, newName, this, true, newContext);
             setConfig(sandboxConfig);
         } else {
-            newChild = oldContext.createChild(newName, newContext);
+            newScope = this.createChild(newName, newContext);
         }
-        instanceTL.set(newChild);
-        newChild.updateFlags();
-        try {
-            return executeScope(runnable, callable);
-        } finally {
-            newChild.context = null;
-            instanceTL.set(oldContext);
-            setConfig(oldConfig);
-            setLogEnabled(oldLogEnabled);
-        }
+        instanceTL.set(newScope);
+        newScope.setLogEnabled(this.isLogEnabled());
+        newScope.updateFlags();
+        return newScope;
     }
 
     private <T> T executeScope(Runnable runnable, Callable<T> callable) {
@@ -283,7 +293,6 @@ public final class DebugScope {
             meterEnabled = false;
             timeEnabled = false;
             dumpEnabled = false;
-            setLogEnabled(false);
 
             // Be pragmatic: provide a default log stream to prevent a crash if the stream is not
             // set while logging
@@ -293,7 +302,9 @@ public final class DebugScope {
             timeEnabled = config.isTimeEnabled();
             dumpEnabled = config.isDumpEnabled();
             output = config.output();
-            setLogEnabled(config.isLogEnabled());
+            if (config.isLogEnabled()) {
+                setLogEnabled(true);
+            }
         }
     }
 
@@ -310,7 +321,7 @@ public final class DebugScope {
                         return new RuntimeException("Exception while intercepting exception", t);
                     }
                 }
-            }, false, null, new Object[]{e});
+            }, null, new Object[]{e});
         }
         return null;
     }
@@ -332,7 +343,7 @@ public final class DebugScope {
         if (this.qualifiedName.length() > 0) {
             newQualifiedName = this.qualifiedName + SCOPE_SEP + newName;
         }
-        DebugScope result = new DebugScope(newName, newQualifiedName, this, newContext);
+        DebugScope result = new DebugScope(newName, newQualifiedName, this, false, newContext);
         return result;
     }
 
@@ -355,7 +366,7 @@ public final class DebugScope {
 
                     private void selectScope() {
                         while (currentScope != null && currentScope.context.length <= objectIndex) {
-                            currentScope = currentScope.parent;
+                            currentScope = currentScope.sandbox ? null : currentScope.parent;
                             objectIndex = 0;
                         }
                     }

@@ -37,7 +37,7 @@ import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
 
-public class MacroNode extends AbstractStateSplit implements Lowerable, MemoryCheckpoint.Single {
+public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, MemoryCheckpoint.Single {
 
     @Input protected final NodeInputList<ValueNode> arguments;
 
@@ -96,8 +96,7 @@ public class MacroNode extends AbstractStateSplit implements Lowerable, MemoryCh
      */
     protected StructuredGraph lowerReplacement(final StructuredGraph replacementGraph, LoweringTool tool) {
         replacementGraph.setGuardsStage(graph().getGuardsStage());
-        final PhaseContext c = new PhaseContext(tool.getMetaAccess(), tool.getCodeCache(), tool.getConstantReflection(), tool.getForeignCalls(), tool.getLowerer(), tool.assumptions(),
-                        tool.getReplacements());
+        final PhaseContext c = new PhaseContext(tool.getMetaAccess(), tool.getConstantReflection(), tool.getLowerer(), tool.getReplacements(), tool.assumptions());
         Debug.scope("LoweringReplacement", replacementGraph, new Runnable() {
 
             public void run() {

@@ -107,7 +107,8 @@ public class Debug {
 
     public static void sandbox(String name, DebugConfig config, Runnable runnable) {
         if (ENABLED) {
-            DebugScope.getInstance().scope(name, runnable, null, true, config, new Object[0]);
+            DebugConfig sandboxConfig = config == null ? DebugScope.getConfig() : config;
+            DebugScope.getInstance().scope(name, runnable, null, sandboxConfig, new Object[0]);
         } else {
             runnable.run();
         }
@@ -124,7 +125,8 @@ public class Debug {
      */
     public static void sandbox(String name, Object[] context, DebugConfig config, Runnable runnable) {
         if (ENABLED) {
-            DebugScope.getInstance().scope(name, runnable, null, true, config, context);
+            DebugConfig sandboxConfig = config == null ? DebugScope.getConfig() : config;
+            DebugScope.getInstance().scope(name, runnable, null, sandboxConfig, context);
         } else {
             runnable.run();
         }
@@ -141,7 +143,8 @@ public class Debug {
      */
     public static <T> T sandbox(String name, Object[] context, DebugConfig config, Callable<T> callable) {
         if (ENABLED) {
-            return DebugScope.getInstance().scope(name, null, callable, true, config, context);
+            DebugConfig sandboxConfig = config == null ? DebugScope.getConfig() : config;
+            return DebugScope.getInstance().scope(name, null, callable, sandboxConfig, context);
         } else {
             return DebugScope.call(callable);
         }
@@ -161,7 +164,7 @@ public class Debug {
 
     public static void scope(String name, Object[] context, Runnable runnable) {
         if (ENABLED) {
-            DebugScope.getInstance().scope(name, runnable, null, false, null, context);
+            DebugScope.getInstance().scope(name, runnable, null, null, context);
         } else {
             runnable.run();
         }
@@ -181,7 +184,7 @@ public class Debug {
 
     public static <T> T scope(String name, Object[] context, Callable<T> callable) {
         if (ENABLED) {
-            return DebugScope.getInstance().scope(name, null, callable, false, null, context);
+            return DebugScope.getInstance().scope(name, null, callable, null, context);
         } else {
             return DebugScope.call(callable);
         }
@@ -231,7 +234,7 @@ public class Debug {
         }
 
         @Override
-        public Indent logIndent(String msg, Object... args) {
+        public Indent logAndIndent(String msg, Object... args) {
             return this;
         }
 
@@ -240,6 +243,9 @@ public class Debug {
             return this;
         }
 
+        @Override
+        public void close() {
+        }
     }
 
     private static final NoLogger noLoggerInstance = new NoLogger();
@@ -281,9 +287,9 @@ public class Debug {
      * @param msg The format string of the log message
      * @param args The arguments referenced by the log message string
      * @return The new indentation level
-     * @see Indent#logIndent
+     * @see Indent#logAndIndent
      */
-    public static Indent logIndent(String msg, Object... args) {
+    public static Indent logAndIndent(String msg, Object... args) {
         if (ENABLED) {
             DebugScope scope = DebugScope.getInstance();
             scope.log(msg, args);
@@ -300,7 +306,7 @@ public class Debug {
      * @param args The arguments referenced by the log message string
      * @return The new indentation level
      */
-    public static Indent logIndent(boolean enabled, String msg, Object... args) {
+    public static Indent logAndIndent(boolean enabled, String msg, Object... args) {
         if (ENABLED) {
             DebugScope scope = DebugScope.getInstance();
             boolean saveLogEnabled = scope.isLogEnabled();
@@ -373,9 +379,19 @@ public class Debug {
         }
     }
 
-    public static void setConfig(DebugConfig config) {
+    /**
+     * Changes the debug configuration for the current thread.
+     * 
+     * @param config new configuration to use for the current thread
+     * @return an object that when {@linkplain DebugConfigScope#close() closed} will restore the
+     *         debug configuration for the current thread to what it was before this method was
+     *         called
+     */
+    public static DebugConfigScope setConfig(DebugConfig config) {
         if (ENABLED) {
-            DebugScope.getInstance().setConfig(config);
+            return new DebugConfigScope(config);
+        } else {
+            return null;
         }
     }
 

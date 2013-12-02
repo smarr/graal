@@ -1,3 +1,4 @@
+**/.gitignore
 **/.checkstyle
 **/.classpath
 **/*.jar
@@ -11,11 +12,13 @@
 build
 **/.factorypath
 **/src_gen
+**/*.timestamp
 lib
 mxtool/*.class
 mx/*.pyc
 mx/env
 mx/eclipse-launches
+mx/currentAnnotationProcessors
 jdk1.*
 workingsets.xml
 published

@@ -966,6 +966,7 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
                 }
                 clazz.add(createGenericExecuteAndSpecialize(node, rootGroup));
                 clazz.add(createInfoMessage(node));
+                clazz.add(createCreateUninitializedMethod(node));
             }
 
             if (needsInvokeCopyConstructorMethod()) {
@@ -1152,6 +1153,19 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
             builder.startReturn().string("message").end();
             builder.end();
 
+            return method;
+        }
+
+        private CodeExecutableElement createCreateUninitializedMethod(NodeData node) {
+            CodeExecutableElement method = new CodeExecutableElement(modifiers(Modifier.PUBLIC), context.getTruffleTypes().getNode(), "createUninitialized");
+
+            CodeTreeBuilder body = method.createBuilder();
+            if (node.getSpecializations().isEmpty()) {
+                body.startThrow().startNew(getContext().getType(UnsupportedOperationException.class)).end().end();
+            } else {
+                SpecializationData uninit = node.getSpecializations().get(0);
+                body.startReturn().startNew(nodeSpecializationClassName(uninit)).startGroup().cast(baseClassName(node)).string("this").end().end().end();
+            }
             return method;
         }
 
@@ -2682,12 +2696,7 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
             SpecializationData specialization = getModel();
             NodeData node = specialization.getNode();
             for (ExecutableElement constructor : ElementFilter.constructorsIn(superTypeElement.getEnclosedElements())) {
-                if (specialization.isUninitialized()) {
-                    // ignore copy constructors for uninitialized if not polymorphic
-                    if (isCopyConstructor(constructor) && !node.isPolymorphic()) {
-                        continue;
-                    }
-                } else if (node.getUninitializedSpecialization() != null) {
+                if (!specialization.isUninitialized() && node.getUninitializedSpecialization() != null) {
                     // ignore others than copy constructors for specialized nodes
                     if (!isCopyConstructor(constructor)) {
                         continue;

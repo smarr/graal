@@ -30,7 +30,6 @@ import static java.lang.reflect.Modifier.*;
 
 import java.lang.reflect.*;
 import java.util.*;
-import java.util.concurrent.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.code.Assumptions.Assumption;
@@ -38,6 +37,7 @@ import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.meta.JavaTypeProfile.ProfiledType;
 import com.oracle.graal.api.meta.ResolvedJavaType.Representation;
 import com.oracle.graal.debug.*;
+import com.oracle.graal.debug.Debug.Scope;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.Graph.DuplicationReplacement;
 import com.oracle.graal.graph.Node.ValueNumberable;
@@ -173,12 +173,9 @@ public class InliningUtil {
     }
 
     public static void logInliningDecision(final String msg, final Object... args) {
-        Debug.scope(inliningDecisionsScopeString, new Runnable() {
-
-            public void run() {
-                Debug.log(msg, args);
-            }
-        });
+        try (Scope s = Debug.scope(inliningDecisionsScopeString)) {
+            Debug.log(msg, args);
+        }
     }
 
     private static boolean logNotInlinedMethod(Invoke invoke, String msg) {
@@ -220,12 +217,9 @@ public class InliningUtil {
     }
 
     public static boolean shouldLogInliningDecision() {
-        return Debug.scope(inliningDecisionsScopeString, new Callable<Boolean>() {
-
-            public Boolean call() {
-                return Debug.isLogEnabled();
-            }
-        });
+        try (Scope s = Debug.scope(inliningDecisionsScopeString)) {
+            return Debug.isLogEnabled();
+        }
     }
 
     private static String methodName(ResolvedJavaMethod method, Invoke invoke) {
@@ -435,7 +429,7 @@ public class InliningUtil {
             super(invoke);
             this.concrete = concrete;
             this.type = type;
-            assert !isAbstract(type.getModifiers()) : type;
+            assert type.isArray() || !isAbstract(type.getModifiers()) : type;
         }
 
         @Override
@@ -1139,7 +1133,7 @@ public class InliningUtil {
             }
 
             ResolvedJavaType type = ptypes[0].getType();
-            assert !isAbstract(type.getModifiers());
+            assert type.isArray() || !isAbstract(type.getModifiers());
             ResolvedJavaMethod concrete = type.resolveMethod(targetMethod);
             if (!checkTargetConditions(data, replacements, invoke, concrete, optimisticOpts)) {
                 return null;
@@ -1211,7 +1205,7 @@ public class InliningUtil {
                 if (index == -1) {
                     notRecordedTypeProbability += type.getProbability();
                 } else {
-                    assert !isAbstract(type.getType().getModifiers());
+                    assert type.getType().isArray() || !isAbstract(type.getType().getModifiers()) : type + " " + concrete;
                     usedTypes.add(type);
                     typesToConcretes.add(index);
                 }

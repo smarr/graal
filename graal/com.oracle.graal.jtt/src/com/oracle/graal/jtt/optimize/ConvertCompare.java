@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,27 +20,18 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.graal.hotspot.test;
+package com.oracle.graal.jtt.optimize;
 
-import static com.oracle.graal.phases.GraalOptions.*;
-
+import com.oracle.graal.jtt.*;
 import org.junit.*;
 
-import com.oracle.graal.compiler.test.*;
-import com.oracle.graal.hotspot.*;
-
-/**
- * Tests {@link CompileTheWorld} functionality.
- */
-public class CompileTheWorldTest extends GraalCompilerTest {
-
-    @Test
-    public void testRtJar() throws Throwable {
-        boolean originalSetting = ExitVMOnException.getValue();
-        // Compile a couple classes in rt.jar
-        String file = System.getProperty("java.home") + "/lib/rt.jar";
-        new CompileTheWorld(file, 1, 5, false).compile();
-        ExitVMOnException.setValue(originalSetting);
+public class ConvertCompare extends JTTTest {
+    public static boolean test(int a, float d) {
+        return a == (double) d;
     }
 
+    @Test
+    public void run0() throws Throwable {
+        runTest("test", 0, 2.87f);
+    }
 }

@@ -639,7 +639,7 @@ def build(args, vm=None):
             # extract latest release tag for graal
             try:
                 tags = [x.split(' ')[0] for x in subprocess.check_output(['hg', 'tags']).split('\n') if x.startswith("graal-")]
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError):
                 with open('.hgtags') as f:
                     tags = [x.split(' ')[0] for x in f.readlines() if x.startswith("graal-")]
             if tags:

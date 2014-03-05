@@ -25,6 +25,7 @@ package com.oracle.graal.compiler.phases;
 import static com.oracle.graal.phases.GraalOptions.*;
 
 import com.oracle.graal.loop.phases.*;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
@@ -33,7 +34,7 @@ import com.oracle.graal.virtual.phases.ea.*;
 public class MidTier extends PhaseSuite<MidTierContext> {
 
     public MidTier() {
-        CanonicalizerPhase canonicalizer = new CanonicalizerPhase(!AOTCompilation.getValue());
+        CanonicalizerPhase canonicalizer = new CanonicalizerPhase(!ImmutableCode.getValue());
 
         if (OptPushThroughPi.getValue()) {
             appendPhase(new PushThroughPiPhase());
@@ -64,7 +65,7 @@ public class MidTier extends PhaseSuite<MidTierContext> {
         }
 
         if (OptEliminatePartiallyRedundantGuards.getValue()) {
-            appendPhase(new OptimizeGuardAnchors());
+            appendPhase(new OptimizeGuardAnchorsPhase());
         }
 
         if (ConditionalElimination.getValue() && OptCanonicalizer.getValue()) {
@@ -72,7 +73,7 @@ public class MidTier extends PhaseSuite<MidTierContext> {
         }
 
         if (OptEliminatePartiallyRedundantGuards.getValue()) {
-            appendPhase(new OptimizeGuardAnchors());
+            appendPhase(new OptimizeGuardAnchorsPhase());
         }
 
         if (OptCanonicalizer.getValue()) {
@@ -85,7 +86,7 @@ public class MidTier extends PhaseSuite<MidTierContext> {
 
         appendPhase(new GuardLoweringPhase());
 
-        appendPhase(new LoweringPhase(canonicalizer));
+        appendPhase(new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.MID_TIER));
 
         appendPhase(new FrameStateAssignmentPhase());
 

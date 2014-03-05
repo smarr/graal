@@ -504,7 +504,7 @@ const char* nmethod::compile_kind() const {
 
 // Fill in default values for various flag fields
 void nmethod::init_defaults() {
-  _state                      = alive;
+  _state                      = in_use;
   _marked_for_reclamation     = 0;
   _has_flushed_dependencies   = 0;
   _has_unsafe_access          = 0;
@@ -528,7 +528,7 @@ void nmethod::init_defaults() {
   _compiler                = NULL;
 #ifdef GRAAL
   _graal_installed_code   = NULL;
-  _triggered_deoptimizations = NULL;
+  _speculation_log        = NULL;
 #endif
 #ifdef HAVE_DTRACE_H
   _trap_offset             = 0;
@@ -627,7 +627,7 @@ nmethod* nmethod::new_nmethod(methodHandle method,
   GrowableArray<jlong>* leaf_graph_ids
 #ifdef GRAAL
   , Handle installed_code,
-  Handle triggered_deoptimizations
+  Handle speculationLog
 #endif
 )
 {
@@ -656,7 +656,7 @@ nmethod* nmethod::new_nmethod(methodHandle method,
             leaf_graph_ids
 #ifdef GRAAL
             , installed_code,
-            triggered_deoptimizations
+            speculationLog
 #endif
             );
 
@@ -885,7 +885,7 @@ nmethod::nmethod(
   GrowableArray<jlong>* leaf_graph_ids
 #ifdef GRAAL
   , Handle installed_code,
-  Handle triggered_deoptimizations
+  Handle speculation_log
 #endif
   )
   : CodeBlob("nmethod", code_buffer, sizeof(nmethod),
@@ -913,7 +913,7 @@ nmethod::nmethod(
 
 #ifdef GRAAL
     _graal_installed_code = installed_code();
-    _triggered_deoptimizations = (typeArrayOop)triggered_deoptimizations();
+    _speculation_log = (instanceOop)speculation_log();
 #endif
     if (compiler->is_graal()) {
       // Graal might not produce any stub sections
@@ -1523,15 +1523,15 @@ bool nmethod::make_not_entrant_or_zombie(unsigned int state) {
     assert(state == not_entrant, "other cases may need to be handled differently");
   }
 #ifdef GRAAL
-      if (_graal_installed_code != NULL) {
-        // Break the link between nmethod and HotSpotInstalledCode such that the nmethod can subsequently be flushed safely.
-        HotSpotInstalledCode::set_codeBlob(_graal_installed_code, 0);
-      }
+  if (_graal_installed_code != NULL) {
+    // Break the link between nmethod and HotSpotInstalledCode such that the nmethod can subsequently be flushed safely.
+    HotSpotInstalledCode::set_codeBlob(_graal_installed_code, 0);
+  }
 #endif
 
   if (TraceCreateZombies) {
     ResourceMark m;
-    tty->print_cr("nmethod <" INTPTR_FORMAT "> %s code made %s", this, this->method()->name_and_sig_as_C_string(), (state == not_entrant) ? "not entrant" : "zombie");
+    tty->print_cr("nmethod <" INTPTR_FORMAT "> %s code made %s", this, this->method() ? this->method()->name_and_sig_as_C_string() : "null", (state == not_entrant) ? "not entrant" : "zombie");
   }
 
   NMethodSweeper::report_state_change(this);
@@ -1762,6 +1762,12 @@ void nmethod::do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred)
       }
     }
   }
+
+  if (_speculation_log != NULL) {
+    if (!is_alive->do_object_b(_speculation_log)) {
+      _speculation_log = NULL;
+    }
+  }
 #endif
 
   // Exception cache
@@ -1790,8 +1796,8 @@ void nmethod::do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred)
           CompiledICHolder* cichk_oop = ic->cached_icholder();
           if (cichk_oop->holder_method()->method_holder()->is_loader_alive(is_alive) &&
               cichk_oop->holder_klass()->is_loader_alive(is_alive)) {
-              continue;
-            }
+            continue;
+          }
         } else {
           Metadata* ic_oop = ic->cached_metadata();
           if (ic_oop != NULL) {
@@ -1807,8 +1813,8 @@ void nmethod::do_unloading(BoolObjectClosure* is_alive, bool unloading_occurred)
               ShouldNotReachHere();
             }
           }
-          }
-          ic->set_to_clean();
+        }
+        ic->set_to_clean();
       }
     }
   }
@@ -1990,8 +1996,8 @@ void nmethod::oops_do(OopClosure* f, bool allow_zombie) {
   if (_graal_installed_code != NULL) {
     f->do_oop((oop*) &_graal_installed_code);
   }
-  if (_triggered_deoptimizations != NULL) {
-    f->do_oop((oop*) &_triggered_deoptimizations);
+  if (_speculation_log != NULL) {
+    f->do_oop((oop*) &_speculation_log);
   }
 #endif
 
@@ -2532,8 +2538,8 @@ void nmethod::verify() {
 
 void nmethod::verify_interrupt_point(address call_site) {
   // Verify IC only when nmethod installation is finished.
-  bool is_installed = (method()->code() == this) // nmethod is in state 'alive' and installed
-                      || !this->is_in_use();     // nmethod is installed, but not in 'alive' state
+  bool is_installed = (method()->code() == this) // nmethod is in state 'in_use' and installed
+                      || !this->is_in_use();     // nmethod is installed, but not in 'in_use' state
   if (is_installed) {
     Thread *cur = Thread::current();
     if (CompiledIC_lock->owner() == cur ||

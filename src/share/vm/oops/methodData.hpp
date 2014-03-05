@@ -1900,7 +1900,11 @@ public:
 
   // Whole-method sticky bits and flags
   enum {
+#ifdef GRAAL
+    _trap_hist_limit    = 18,   // decoupled from Deoptimization::Reason_LIMIT
+#else
     _trap_hist_limit    = 17,   // decoupled from Deoptimization::Reason_LIMIT
+#endif
     _trap_hist_mask     = max_jubyte,
     _extra_data_count   = 4     // extra DataLayout headers, for trap history
   }; // Public flag values
@@ -1910,7 +1914,11 @@ private:
   uint _nof_overflow_traps;         // trap count, excluding _trap_hist
   union {
     intptr_t _align;
+#ifdef GRAAL
+    u1 _array[2*_trap_hist_limit];
+#else
     u1 _array[_trap_hist_limit];
+#endif
   } _trap_hist;
 
   // Support for interprocedural escape analysis, from Thomas Kotzmann.
@@ -2185,7 +2193,7 @@ public:
 
   // Return (uint)-1 for overflow.
   uint trap_count(int reason) const {
-    assert((uint)reason < _trap_hist_limit, "oob");
+    assert((uint)reason < GRAAL_ONLY(2*) _trap_hist_limit, "oob");
     return (int)((_trap_hist._array[reason]+1) & _trap_hist_mask) - 1;
   }
   // For loops:
@@ -2194,7 +2202,7 @@ public:
   uint inc_trap_count(int reason) {
     // Count another trap, anywhere in this method.
     assert(reason >= 0, "must be single trap");
-    assert((uint)reason < _trap_hist_limit, "oob");
+    assert((uint)reason < GRAAL_ONLY(2*) _trap_hist_limit, "oob");
     uint cnt1 = 1 + _trap_hist._array[reason];
     if ((cnt1 & _trap_hist_mask) != 0) {  // if no counter overflow...
       _trap_hist._array[reason] = cnt1;

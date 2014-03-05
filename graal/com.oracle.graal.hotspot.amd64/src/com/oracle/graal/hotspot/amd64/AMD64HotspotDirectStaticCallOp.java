@@ -51,12 +51,13 @@ final class AMD64HotspotDirectStaticCallOp extends DirectCallOp {
     }
 
     @Override
-    public void emitCode(TargetMethodAssembler tasm, AMD64MacroAssembler masm) {
+    public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
         // The mark for an invocation that uses an inline cache must be placed at the
         // instruction that loads the Klass from the inline cache.
-        AMD64Move.move(tasm, masm, AMD64.rbx.asValue(Kind.Long), metaspaceMethod);
-        tasm.recordMark(invokeKind == InvokeKind.Static ? Marks.MARK_INVOKESTATIC : Marks.MARK_INVOKESPECIAL);
-        AMD64Move.move(tasm, masm, AMD64.rax.asValue(Kind.Long), Constant.forLong(HotSpotGraalRuntime.runtime().getConfig().nonOopBits));
-        super.emitCode(tasm, masm);
+        AMD64Move.move(crb, masm, AMD64.rbx.asValue(Kind.Long), metaspaceMethod);
+        crb.recordMark(invokeKind == InvokeKind.Static ? Marks.MARK_INVOKESTATIC : Marks.MARK_INVOKESPECIAL);
+        // This must be emitted exactly like this to ensure it's patchable
+        masm.movq(AMD64.rax, HotSpotGraalRuntime.runtime().getConfig().nonOopBits);
+        super.emitCode(crb, masm);
     }
 }

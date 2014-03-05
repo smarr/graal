@@ -24,7 +24,6 @@ package com.oracle.graal.hotspot.sparc;
 
 import static com.oracle.graal.hotspot.HotSpotGraalRuntime.*;
 import static com.oracle.graal.lir.LIRInstruction.OperandFlag.*;
-import static com.oracle.graal.phases.GraalOptions.*;
 
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.asm.sparc.*;
@@ -48,12 +47,13 @@ final class SPARCHotSpotReturnOp extends SPARCHotSpotEpilogueOp {
     }
 
     @Override
-    public void emitCode(TargetMethodAssembler tasm, SPARCMacroAssembler masm) {
-        if (!isStub && (tasm.frameContext != null || !OptEliminateSafepoints.getValue())) {
+    public void emitCode(CompilationResultBuilder crb, SPARCMacroAssembler masm) {
+        if (!isStub) {
+            // Every non-stub compile method must have a poll before the return.
             // Using the same scratch register as LIR_Assembler::return_op
             // in c1_LIRAssembler_sparc.cpp
-            SPARCHotSpotSafepointOp.emitCode(tasm, masm, runtime().getConfig(), true, null, SPARC.l0);
+            SPARCHotSpotSafepointOp.emitCode(crb, masm, runtime().getConfig(), true, null, SPARC.l0);
         }
-        ReturnOp.emitCodeHelper(tasm, masm);
+        ReturnOp.emitCodeHelper(crb, masm);
     }
 }

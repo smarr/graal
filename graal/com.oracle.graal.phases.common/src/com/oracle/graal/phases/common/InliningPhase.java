@@ -39,7 +39,6 @@ import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.nodes.util.*;
 import com.oracle.graal.options.*;
-import com.oracle.graal.phases.PhasePlan.PhasePosition;
 import com.oracle.graal.phases.common.InliningUtil.InlineInfo;
 import com.oracle.graal.phases.common.InliningUtil.Inlineable;
 import com.oracle.graal.phases.common.InliningUtil.InlineableGraph;
@@ -250,16 +249,16 @@ public class InliningPhase extends AbstractInliningPhase {
 
             boolean callerHasMoreInformationAboutArguments = false;
             NodeInputList<ValueNode> args = invoke.callTarget().arguments();
-            for (LocalNode localNode : newGraph.getNodes(LocalNode.class).snapshot()) {
-                ValueNode arg = args.get(localNode.index());
+            for (ParameterNode param : newGraph.getNodes(ParameterNode.class).snapshot()) {
+                ValueNode arg = args.get(param.index());
                 if (arg.isConstant()) {
                     Constant constant = arg.asConstant();
-                    newGraph.replaceFloating(localNode, ConstantNode.forConstant(constant, context.getMetaAccess(), newGraph));
+                    newGraph.replaceFloating(param, ConstantNode.forConstant(constant, context.getMetaAccess(), newGraph));
                     callerHasMoreInformationAboutArguments = true;
                 } else {
-                    Stamp joinedStamp = localNode.stamp().join(arg.stamp());
-                    if (joinedStamp != null && !joinedStamp.equals(localNode.stamp())) {
-                        localNode.setStamp(joinedStamp);
+                    Stamp joinedStamp = param.stamp().join(arg.stamp());
+                    if (joinedStamp != null && !joinedStamp.equals(param.stamp())) {
+                        param.setStamp(joinedStamp);
                         callerHasMoreInformationAboutArguments = true;
                     }
                 }
@@ -294,8 +293,8 @@ public class InliningPhase extends AbstractInliningPhase {
     private StructuredGraph parseBytecodes(StructuredGraph newGraph, HighTierContext context) {
         boolean hasMatureProfilingInfo = newGraph.method().getProfilingInfo().isMature();
 
-        if (context.getPhasePlan() != null) {
-            context.getPhasePlan().runPhases(PhasePosition.AFTER_PARSING, newGraph);
+        if (context.getGraphBuilderSuite() != null) {
+            context.getGraphBuilderSuite().apply(newGraph, context);
         }
         assert newGraph.start().next() != null : "graph needs to be populated during PhasePosition.AFTER_PARSING";
 
@@ -427,6 +426,10 @@ public class InliningPhase extends AbstractInliningPhase {
 
             if (isIntrinsic(replacements, info)) {
                 return InliningUtil.logInlinedMethod(info, inliningDepth, fullyProcessed, "intrinsic");
+            }
+
+            if (info.shouldInline()) {
+                return InliningUtil.logInlinedMethod(info, inliningDepth, fullyProcessed, "forced inlining");
             }
 
             double inliningBonus = getInliningBonus(info);
@@ -858,7 +861,7 @@ public class InliningPhase extends AbstractInliningPhase {
 
         @Override
         public String toString() {
-            return MetaUtil.format("%H.%n(%p)", method()) + remainingInvokes;
+            return (graph != null ? MetaUtil.format("%H.%n(%p)", method()) : "<null method>") + remainingInvokes;
         }
     }
 

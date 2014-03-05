@@ -38,6 +38,7 @@ import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.hotspot.nodes.*;
 import com.oracle.graal.hotspot.replacements.*;
 import com.oracle.graal.nodes.StructuredGraph.GuardsStage;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.replacements.*;
 import com.oracle.graal.replacements.Snippet.ConstantParameter;
 import com.oracle.graal.replacements.Snippet.Fold;
@@ -67,7 +68,7 @@ public class NewInstanceStub extends SnippetStub {
         Constant intArrayHub = intArrayType.klass();
         intArrayHub = Constant.forIntegerKind(runtime().getTarget().wordKind, intArrayHub.asLong(), null);
 
-        Arguments args = new Arguments(stub, GuardsStage.FLOATING_GUARDS);
+        Arguments args = new Arguments(stub, GuardsStage.FLOATING_GUARDS, LoweringTool.StandardLoweringStage.HIGH_TIER);
         args.add("hub", null);
         args.addConst("intArrayHub", intArrayHub);
         args.addConst("threadRegister", providers.getRegisters().getThreadRegister());
@@ -106,7 +107,7 @@ public class NewInstanceStub extends SnippetStub {
         int sizeInBytes = hub.readInt(klassInstanceSizeOffset(), LocationIdentity.FINAL_LOCATION);
         Word thread = registerAsWord(threadRegister);
         if (!forceSlowPath() && inlineContiguousAllocationSupported()) {
-            if (hub.readByte(klassStateOffset(), CLASS_STATE_LOCATION) == klassStateFullyInitialized()) {
+            if (isKlassFullyInitialized(hub)) {
                 Word memory = refillAllocate(thread, intArrayHub, sizeInBytes, logging());
                 if (memory.notEqual(0)) {
                     Word prototypeMarkWord = hub.readWord(prototypeMarkWordOffset(), PROTOTYPE_MARK_WORD_LOCATION);

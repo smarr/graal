@@ -56,6 +56,25 @@ public final class TypeSwitchNode extends SwitchNode implements LIRLowerable, Si
         assert successors.length <= keys.length + 1;
         assert keySuccessors.length == keyProbabilities.length;
         this.keys = keys;
+        assert assertValues();
+    }
+
+    @Override
+    public boolean isSorted() {
+        Kind kind = value().kind();
+        if (kind.isNumericInteger()) {
+            Constant lastKey = null;
+            for (int i = 0; i < keyCount(); i++) {
+                Constant key = keyAt(i);
+                if (lastKey != null && key.asLong() <= lastKey.asLong()) {
+                    return false;
+                }
+                lastKey = key;
+            }
+            return true;
+        } else {
+            return false;
+        }
     }
 
     @Override
@@ -86,7 +105,11 @@ public final class TypeSwitchNode extends SwitchNode implements LIRLowerable, Si
             for (int i = 0; i < keyCount(); i++) {
                 Constant typeHub = keyAt(i);
                 assert constant.getKind() == typeHub.getKind();
-                if (tool.getConstantReflection().constantEquals(constant, typeHub)) {
+                Boolean equal = tool.getConstantReflection().constantEquals(constant, typeHub);
+                if (equal == null) {
+                    /* We don't know if this key is a match or not, so we cannot simplify. */
+                    return;
+                } else if (equal.booleanValue()) {
                     survivingEdge = keySuccessorIndex(i);
                 }
             }

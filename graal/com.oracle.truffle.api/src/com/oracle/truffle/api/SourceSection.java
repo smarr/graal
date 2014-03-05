@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -91,5 +91,45 @@ public interface SourceSection {
      * @return the code as a String object
      */
     String getCode();
+
+    /**
+     * Singleton instance with no content.
+     */
+    SourceSection NULL = new NullSourceSection() {
+
+        public Source getSource() {
+            return null;
+        }
+
+        public int getStartLine() {
+            return 0;
+        }
+
+        public int getStartColumn() {
+            return 0;
+        }
+
+        public int getCharIndex() {
+            return 0;
+        }
+
+        @Override
+        public int getCharLength() {
+            return 0;
+        }
+
+        public int getCharEndIndex() {
+            return 0;
+        }
+
+        public String getIdentifier() {
+            return null;
+        }
+
+        public String getCode() {
+            return null;
+        }
+
+    };
 
 }

@@ -33,7 +33,6 @@ import com.oracle.graal.debug.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.Node.Verbosity;
 import com.oracle.graal.nodes.*;
-import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.cfg.*;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.spi.*;
@@ -42,6 +41,7 @@ import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.graph.*;
 import com.oracle.graal.phases.graph.ReentrantBlockIterator.BlockIteratorClosure;
 import com.oracle.graal.phases.graph.ReentrantBlockIterator.LoopInfo;
+import com.oracle.graal.phases.util.*;
 
 public final class SchedulePhase extends Phase {
 
@@ -74,111 +74,14 @@ public final class SchedulePhase extends Phase {
     }
 
     public static enum MemoryScheduling {
-        NONE, CONSERVATIVE, OPTIMAL
-    }
-
-    /**
-     * This closure iterates over all nodes of a scheduled graph (it expects a
-     * {@link SchedulingStrategy#EARLIEST} schedule) and keeps a list of "active" reads. Whenever it
-     * encounters a read, it adds it to the active reads. Whenever it encounters a memory
-     * checkpoint, it adds all reads that need to be committed before this checkpoint to the
-     * "phantom" usages and inputs, so that the read is scheduled before the checkpoint afterwards.
-     * 
-     * At merges, the intersection of all sets of active reads is calculated. A read that was
-     * committed within one predecessor branch cannot be scheduled after the merge anyway.
-     * 
-     * Similarly for loops, all reads that are killed somewhere within the loop are removed from the
-     * exits' active reads, since they cannot be scheduled after the exit anyway.
-     */
-    private class MemoryScheduleClosure extends BlockIteratorClosure<HashSet<FloatingReadNode>> {
-
-        @Override
-        protected HashSet<FloatingReadNode> getInitialState() {
-            return new HashSet<>();
-        }
-
-        @Override
-        protected HashSet<FloatingReadNode> processBlock(Block block, HashSet<FloatingReadNode> currentState) {
-            for (Node node : blockToNodesMap.get(block)) {
-                if (node instanceof FloatingReadNode) {
-                    currentState.add((FloatingReadNode) node);
-                } else if (node instanceof MemoryCheckpoint.Single) {
-                    LocationIdentity identity = ((MemoryCheckpoint.Single) node).getLocationIdentity();
-                    processIdentity(currentState, (FixedNode) node, identity);
-                } else if (node instanceof MemoryCheckpoint.Multi) {
-                    for (LocationIdentity identity : ((MemoryCheckpoint.Multi) node).getLocationIdentities()) {
-                        processIdentity(currentState, (FixedNode) node, identity);
-                    }
-                }
-                assert MemoryCheckpoint.TypeAssertion.correctType(node);
-            }
-            return currentState;
-        }
-
-        private void processIdentity(HashSet<FloatingReadNode> currentState, FixedNode fixed, LocationIdentity identity) {
-            for (Iterator<FloatingReadNode> iter = currentState.iterator(); iter.hasNext();) {
-                FloatingReadNode read = iter.next();
-                if (identity == ANY_LOCATION || read.location().getLocationIdentity() == identity) {
-                    addPhantomReference(read, fixed);
-                    iter.remove();
-                }
-            }
-        }
-
-        public void addPhantomReference(FloatingReadNode read, FixedNode fixed) {
-            List<FixedNode> usageList = phantomUsages.get(read);
-            if (usageList == null) {
-                phantomUsages.put(read, usageList = new ArrayList<>());
-            }
-            usageList.add(fixed);
-            List<FloatingNode> inputList = phantomInputs.get(fixed);
-            if (inputList == null) {
-                phantomInputs.put(fixed, inputList = new ArrayList<>());
-            }
-            inputList.add(read);
-        }
-
-        @Override
-        protected HashSet<FloatingReadNode> merge(Block merge, List<HashSet<FloatingReadNode>> states) {
-            HashSet<FloatingReadNode> state = new HashSet<>(states.get(0));
-            for (int i = 1; i < states.size(); i++) {
-                state.retainAll(states.get(i));
-            }
-            return state;
-        }
-
-        @Override
-        protected HashSet<FloatingReadNode> cloneState(HashSet<FloatingReadNode> oldState) {
-            return new HashSet<>(oldState);
-        }
-
-        @Override
-        protected List<HashSet<FloatingReadNode>> processLoop(Loop loop, HashSet<FloatingReadNode> state) {
-            LoopInfo<HashSet<FloatingReadNode>> info = ReentrantBlockIterator.processLoop(this, loop, new HashSet<>(state));
-
-            List<HashSet<FloatingReadNode>> loopEndStates = info.endStates;
-
-            // collect all reads that were killed in some branch within the loop
-            Set<FloatingReadNode> killedReads = new HashSet<>(state);
-            Set<FloatingReadNode> survivingReads = new HashSet<>(loopEndStates.get(0));
-            for (int i = 1; i < loopEndStates.size(); i++) {
-                survivingReads.retainAll(loopEndStates.get(i));
-            }
-            killedReads.removeAll(survivingReads);
-
-            // reads that were killed within the loop cannot be scheduled after the loop anyway
-            for (HashSet<FloatingReadNode> exitState : info.exitStates) {
-                exitState.removeAll(killedReads);
-            }
-            return info.exitStates;
-        }
+        NONE, OPTIMAL
     }
 
     private class KillSet implements Iterable<LocationIdentity> {
         private final Set<LocationIdentity> set;
 
         public KillSet() {
-            this.set = new HashSet<>();
+            this.set = new ArraySet<>();
         }
 
         public KillSet(KillSet other) {
@@ -340,8 +243,6 @@ public final class SchedulePhase extends Phase {
      */
     private BlockMap<List<ScheduledNode>> blockToNodesMap;
     private BlockMap<KillSet> blockToKillSet;
-    private final Map<FloatingNode, List<FixedNode>> phantomUsages = new IdentityHashMap<>();
-    private final Map<FixedNode, List<FloatingNode>> phantomInputs = new IdentityHashMap<>();
     private final SchedulingStrategy selectedStrategy;
     private final MemoryScheduling memsched;
 
@@ -350,16 +251,7 @@ public final class SchedulePhase extends Phase {
     }
 
     public SchedulePhase(SchedulingStrategy strategy) {
-        if (MemoryAwareScheduling.getValue() && NewMemoryAwareScheduling.getValue()) {
-            throw new SchedulingError("cannot enable both: MemoryAware- and NewMemoryAwareScheduling");
-        }
-        if (MemoryAwareScheduling.getValue()) {
-            this.memsched = MemoryScheduling.CONSERVATIVE;
-        } else if (NewMemoryAwareScheduling.getValue()) {
-            this.memsched = MemoryScheduling.OPTIMAL;
-        } else {
-            this.memsched = MemoryScheduling.NONE;
-        }
+        this.memsched = MemoryAwareScheduling.getValue() ? MemoryScheduling.OPTIMAL : MemoryScheduling.NONE;
         this.selectedStrategy = strategy;
     }
 
@@ -370,23 +262,12 @@ public final class SchedulePhase extends Phase {
 
     @Override
     protected void run(StructuredGraph graph) {
+        assert GraphOrder.assertNonCyclicGraph(graph);
         cfg = ControlFlowGraph.compute(graph, true, true, true, true);
         earliestCache = graph.createNodeMap();
         blockToNodesMap = new BlockMap<>(cfg);
 
-        if (memsched == MemoryScheduling.CONSERVATIVE && selectedStrategy != SchedulingStrategy.EARLIEST && graph.getNodes(FloatingReadNode.class).isNotEmpty()) {
-            assignBlockToNodes(graph, SchedulingStrategy.EARLIEST);
-            sortNodesWithinBlocks(graph, SchedulingStrategy.EARLIEST);
-
-            ReentrantBlockIterator.apply(new MemoryScheduleClosure(), getCFG().getStartBlock());
-
-            cfg.clearNodeToBlock();
-            blockToNodesMap = new BlockMap<>(cfg);
-
-            assignBlockToNodes(graph, selectedStrategy);
-            sortNodesWithinBlocks(graph, selectedStrategy);
-            printSchedule("after sorting nodes within blocks");
-        } else if (memsched == MemoryScheduling.OPTIMAL && selectedStrategy != SchedulingStrategy.EARLIEST && graph.getNodes(FloatingReadNode.class).isNotEmpty()) {
+        if (memsched == MemoryScheduling.OPTIMAL && selectedStrategy != SchedulingStrategy.EARLIEST && graph.getNodes(FloatingReadNode.class).isNotEmpty()) {
             blockToKillSet = new BlockMap<>(cfg);
 
             assignBlockToNodes(graph, selectedStrategy);
@@ -611,7 +492,7 @@ public final class SchedulePhase extends Phase {
             return latestBlock;
         }
 
-        Stack<Block> path = computePathInDominatorTree(earliestBlock, latestBlock);
+        Deque<Block> path = computePathInDominatorTree(earliestBlock, latestBlock);
         Debug.printf("|path| is %d: %s\n", path.size(), path);
 
         // follow path, start at earliest schedule
@@ -654,8 +535,7 @@ public final class SchedulePhase extends Phase {
                 }
             }
         }
-        assert false : "should have found a block for " + n;
-        return null;
+        throw new SchedulingError("should have found a block for " + n);
     }
 
     /**
@@ -663,8 +543,8 @@ public final class SchedulePhase extends Phase {
      * 
      * @return the order of the stack is such as the first element is the earliest schedule.
      */
-    private static Stack<Block> computePathInDominatorTree(Block earliestBlock, Block latestBlock) {
-        Stack<Block> path = new Stack<>();
+    private static Deque<Block> computePathInDominatorTree(Block earliestBlock, Block latestBlock) {
+        Deque<Block> path = new LinkedList<>();
         Block currentBlock = latestBlock;
         while (currentBlock != null && earliestBlock.dominates(currentBlock)) {
             path.push(currentBlock);
@@ -680,17 +560,17 @@ public final class SchedulePhase extends Phase {
      */
     private static HashSet<Block> computeRegion(Block dominatorBlock, Block dominatedBlock) {
         HashSet<Block> region = new HashSet<>();
-        Stack<Block> workList = new Stack<>();
+        Queue<Block> workList = new LinkedList<>();
 
         region.add(dominatorBlock);
-        workList.addAll(0, dominatorBlock.getSuccessors());
+        workList.addAll(dominatorBlock.getSuccessors());
         while (workList.size() > 0) {
-            Block current = workList.pop();
+            Block current = workList.poll();
             if (current != dominatedBlock) {
                 region.add(current);
                 for (Block b : current.getSuccessors()) {
                     if (!region.contains(b) && !workList.contains(b)) {
-                        workList.add(b);
+                        workList.offer(b);
                     }
                 }
             }
@@ -719,17 +599,12 @@ public final class SchedulePhase extends Phase {
                 blocksForUsage(node, usage, cdbc, strategy);
             }
         }
-        List<FixedNode> usages = phantomUsages.get(node);
-        if (usages != null) {
-            for (FixedNode usage : usages) {
-                if (cfg.getNodeToBlock().get(usage) == null) {
-                    throw new SchedulingError();
-                }
-                cdbc.apply(cfg.getNodeToBlock().get(usage));
+
+        if (assertionEnabled()) {
+            if (cdbc.block != null && !earliestBlock(node).dominates(cdbc.block)) {
+                throw new SchedulingError("failed to find correct latest schedule for %s. cdbc: %s, earliest: %s", node, cdbc.block, earliestBlock(node));
             }
         }
-
-        assert cdbc.block == null || earliestBlock(node).dominates(cdbc.block) : "failed to find correct latest schedule for " + node + ". cdbc: " + cdbc.block + ", earliest: " + earliestBlock(node);
         return cdbc.block;
     }
 
@@ -755,10 +630,6 @@ public final class SchedulePhase extends Phase {
      * Determines the earliest block in which the given node can be scheduled.
      */
     private Block earliestBlock(Node node) {
-        if (node.isExternal()) {
-            return cfg.getStartBlock();
-        }
-
         Block earliest = cfg.getNodeToBlock().get(node);
         if (earliest != null) {
             return earliest;
@@ -887,7 +758,7 @@ public final class SchedulePhase extends Phase {
                         closure.apply(cfg.getNodeToBlock().get(pred));
                     }
                 } else {
-                    // For the time being, only FrameStates can be connected to StateSplits.
+                    // For the time being, FrameStates can only be connected to NodeWithState.
                     if (!(usage instanceof FrameState)) {
                         throw new SchedulingError(usage.toString());
                     }
@@ -1009,10 +880,6 @@ public final class SchedulePhase extends Phase {
         List<FloatingReadNode> reads = new ArrayList<>();
 
         if (memsched == MemoryScheduling.OPTIMAL) {
-            /*
-             * TODO: add assert for invariant
-             * "floatingreads occur always after memory checkpoints in unsorted list"
-             */
             for (ScheduledNode i : instructions) {
                 if (i instanceof FloatingReadNode) {
                     FloatingReadNode frn = (FloatingReadNode) i;
@@ -1066,8 +933,7 @@ public final class SchedulePhase extends Phase {
             if (frn.getLastLocationAccess() == node) {
                 assert identity == ANY_LOCATION || readLocation == identity : "location doesn't match: " + readLocation + ", " + identity;
                 beforeLastLocation.clear(frn);
-            } else if (!beforeLastLocation.isMarked(frn) && (readLocation == identity || (!(node instanceof StartNode) && ANY_LOCATION == identity))) {
-                // TODO: replace instanceof check with object identity check
+            } else if (!beforeLastLocation.isMarked(frn) && (readLocation == identity || (node != getCFG().graph.start() && ANY_LOCATION == identity))) {
                 reads.remove(frn);
                 addToLatestSorting(b, frn, sortedInstructions, visited, reads, beforeLastLocation);
             }
@@ -1084,7 +950,7 @@ public final class SchedulePhase extends Phase {
             for (Node input : state.inputs()) {
                 if (input instanceof VirtualState) {
                     addUnscheduledToLatestSorting(b, (VirtualState) input, sortedInstructions, visited, reads, beforeLastLocation);
-                } else if (!input.isExternal()) {
+                } else {
                     addToLatestSorting(b, (ScheduledNode) input, sortedInstructions, visited, reads, beforeLastLocation);
                 }
             }
@@ -1101,15 +967,9 @@ public final class SchedulePhase extends Phase {
             if (input instanceof FrameState) {
                 assert state == null;
                 state = (FrameState) input;
-            } else if (!input.isExternal()) {
+            } else {
                 addToLatestSorting(b, (ScheduledNode) input, sortedInstructions, visited, reads, beforeLastLocation);
 
-            }
-        }
-        List<FloatingNode> inputs = phantomInputs.get(i);
-        if (inputs != null) {
-            for (FloatingNode input : inputs) {
-                addToLatestSorting(b, input, sortedInstructions, visited, reads, beforeLastLocation);
             }
         }
 

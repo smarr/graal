@@ -31,9 +31,9 @@ import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.nodes.virtual.*;
 
 /**
- * Writes a given {@linkplain #value() value} a {@linkplain AccessNode memory location}.
+ * Writes a given {@linkplain #value() value} a {@linkplain FixedAccessNode memory location}.
  */
-public final class WriteNode extends AccessNode implements StateSplit, LIRLowerable, MemoryCheckpoint.Single, MemoryAccess, Virtualizable {
+public final class WriteNode extends FixedAccessNode implements StateSplit, LIRLowerable, MemoryCheckpoint.Single, MemoryAccess, Virtualizable {
 
     @Input private ValueNode value;
     @Input(notDataflow = true) private FrameState stateAfter;
@@ -91,7 +91,15 @@ public final class WriteNode extends AccessNode implements StateSplit, LIRLowera
     @Override
     public void generate(LIRGeneratorTool gen) {
         Value address = location().generateAddress(gen, gen.operand(object()));
-        gen.emitStore(location().getValueKind(), address, gen.operand(value()), this);
+        // It's possible a constant was forced for other usages so inspect the value directly and
+        // use a constant if it can be directly stored.
+        Value v;
+        if (value().isConstant() && gen.canStoreConstant(value().asConstant(), isCompressible())) {
+            v = value().asConstant();
+        } else {
+            v = gen.operand(value());
+        }
+        gen.emitStore(location().getValueKind(), address, v, this);
     }
 
     @NodeIntrinsic

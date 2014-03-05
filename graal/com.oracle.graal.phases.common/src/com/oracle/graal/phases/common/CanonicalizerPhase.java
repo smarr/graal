@@ -34,7 +34,6 @@ import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.util.*;
 import com.oracle.graal.phases.*;
-import com.oracle.graal.phases.PhasePlan.PhasePosition;
 import com.oracle.graal.phases.tiers.*;
 
 public class CanonicalizerPhase extends BasePhase<PhaseContext> {
@@ -100,11 +99,6 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
 
     public void applyIncremental(StructuredGraph graph, PhaseContext context, Iterable<Node> workingSet, Mark newNodesMark, boolean dumpGraph) {
         new Instance(context, canonicalizeReads, workingSet, newNodesMark, customCanonicalizer).apply(graph, dumpGraph);
-    }
-
-    @Deprecated
-    public void addToPhasePlan(PhasePlan plan, PhaseContext context) {
-        plan.addPhase(PhasePosition.AFTER_PARSING, new Instance(context, canonicalizeReads, customCanonicalizer));
     }
 
     private static final class Instance extends Phase {
@@ -191,7 +185,7 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
                             boolean improvedStamp = tryInferStamp(valueNode);
                             Constant constant = valueNode.stamp().asConstant();
                             if (constant != null && !(node instanceof ConstantNode)) {
-                                performReplacement(valueNode, ConstantNode.forConstant(constant, context.getMetaAccess(), valueNode.graph()));
+                                performReplacement(valueNode, ConstantNode.forConstant(valueNode.stamp(), constant, context.getMetaAccess(), valueNode.graph()));
                             } else if (improvedStamp) {
                                 // the improved stamp may enable additional canonicalization
                                 tryCanonicalize(valueNode, nodeClass);
@@ -240,7 +234,6 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
 
         public boolean baseTryCanonicalize(final Node node, NodeClass nodeClass) {
             if (nodeClass.isCanonicalizable()) {
-                assert !nodeClass.isSimplifiable();
                 METRIC_CANONICALIZATION_CONSIDERED_NODES.increment();
                 try (Scope s = Debug.scope("CanonicalizeNode", node)) {
                     Node canonical = node.canonical(tool);
@@ -248,7 +241,9 @@ public class CanonicalizerPhase extends BasePhase<PhaseContext> {
                 } catch (Throwable e) {
                     throw Debug.handle(e);
                 }
-            } else if (nodeClass.isSimplifiable()) {
+            }
+
+            if (nodeClass.isSimplifiable()) {
                 Debug.log("Canonicalizer: simplifying %s", node);
                 METRIC_SIMPLIFICATION_CONSIDERED_NODES.increment();
                 try (Scope s = Debug.scope("SimplifyNode", node)) {

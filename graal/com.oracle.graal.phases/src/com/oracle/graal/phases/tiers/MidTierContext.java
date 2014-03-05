@@ -23,6 +23,7 @@
 package com.oracle.graal.phases.tiers;
 
 import com.oracle.graal.api.code.*;
+import com.oracle.graal.api.meta.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.util.*;
 
@@ -30,11 +31,15 @@ public class MidTierContext extends PhaseContext {
 
     private final TargetDescription target;
     private final OptimisticOptimizations optimisticOpts;
+    private final ProfilingInfo profilingInfo;
+    private final SpeculationLog log;
 
-    public MidTierContext(Providers copyFrom, Assumptions assumptions, TargetDescription target, OptimisticOptimizations optimisticOpts) {
+    public MidTierContext(Providers copyFrom, Assumptions assumptions, TargetDescription target, OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, SpeculationLog log) {
         super(copyFrom, assumptions);
         this.target = target;
         this.optimisticOpts = optimisticOpts;
+        this.profilingInfo = profilingInfo;
+        this.log = log;
     }
 
     public TargetDescription getTarget() {
@@ -43,5 +48,13 @@ public class MidTierContext extends PhaseContext {
 
     public OptimisticOptimizations getOptimisticOptimizations() {
         return optimisticOpts;
+    }
+
+    public ProfilingInfo getProfilingInfo() {
+        return profilingInfo;
+    }
+
+    public SpeculationLog getSpeculationLog() {
+        return log;
     }
 }

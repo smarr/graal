@@ -31,7 +31,6 @@
 #include "oops/symbol.hpp"
 #include "runtime/java.hpp"
 #include "runtime/reflectionUtils.hpp"
-#include "trace/traceTime.hpp"
 #include "utilities/hashtable.hpp"
 #include "utilities/hashtable.inline.hpp"
 
@@ -78,6 +77,7 @@ class LoaderConstraintTable;
 template <MEMFLAGS F> class HashtableBucket;
 class ResolutionErrorTable;
 class SymbolPropertyTable;
+class Ticks;
 
 // Certain classes are preloaded, such as java.lang.Object and java.lang.String.
 // They are all "well-known", in the sense that no class loader is allowed
@@ -141,7 +141,6 @@ class SymbolPropertyTable;
   /* NOTE: needed too early in bootstrapping process to have checks based on JDK version */                              \
   /* Universe::is_gte_jdk14x_version() is not set up by this point. */                                                   \
   /* It's okay if this turns out to be NULL in non-1.4 JDKs. */                                                          \
-  do_klass(lambda_MagicLambdaImpl_klass,                java_lang_invoke_MagicLambdaImpl,          Opt                 ) \
   do_klass(reflect_MagicAccessorImpl_klass,             sun_reflect_MagicAccessorImpl,             Opt                 ) \
   do_klass(reflect_MethodAccessorImpl_klass,            sun_reflect_MethodAccessorImpl,            Opt_Only_JDK14NewRef) \
   do_klass(reflect_ConstructorAccessorImpl_klass,       sun_reflect_ConstructorAccessorImpl,       Opt_Only_JDK14NewRef) \
@@ -166,6 +165,7 @@ class SymbolPropertyTable;
                                                                                                                          \
   do_klass(StringBuffer_klass,                          java_lang_StringBuffer,                    Pre                 ) \
   do_klass(StringBuilder_klass,                         java_lang_StringBuilder,                   Pre                 ) \
+  do_klass(misc_Unsafe_klass,                           sun_misc_Unsafe,                           Pre                 ) \
                                                                                                                          \
   /* It's NULL in non-1.4 JDKs. */                                                                                       \
   do_klass(StackTraceElement_klass,                     java_lang_StackTraceElement,               Opt                 ) \
@@ -187,6 +187,8 @@ class SymbolPropertyTable;
   do_klass(BitSet_klass,                          java_util_BitSet,                                             Opt) \
   /* graal.hotspot */                                                                                                \
   do_klass(HotSpotCompiledCode_klass,             com_oracle_graal_hotspot_HotSpotCompiledCode,                 Opt) \
+  do_klass(HotSpotCompiledCode_HotSpotData_klass, com_oracle_graal_hotspot_HotSpotCompiledCode_HotSpotData,     Opt) \
+  do_klass(HotSpotCompiledCode_DataSection_klass, com_oracle_graal_hotspot_HotSpotCompiledCode_DataSection,     Opt) \
   do_klass(HotSpotCompiledCode_Comment_klass,     com_oracle_graal_hotspot_HotSpotCompiledCode_Comment,         Opt) \
   do_klass(HotSpotCompiledNmethod_klass,          com_oracle_graal_hotspot_HotSpotCompiledNmethod,              Opt) \
   do_klass(HotSpotCompiledRuntimeStub_klass,      com_oracle_graal_hotspot_HotSpotCompiledRuntimeStub,          Opt) \
@@ -195,12 +197,9 @@ class SymbolPropertyTable;
   do_klass(HotSpotInstalledCode_klass,            com_oracle_graal_hotspot_meta_HotSpotInstalledCode,           Opt) \
   do_klass(HotSpotNmethod_klass,                  com_oracle_graal_hotspot_meta_HotSpotNmethod,                 Opt) \
   do_klass(HotSpotJavaType_klass,                 com_oracle_graal_hotspot_meta_HotSpotJavaType,                Opt) \
-  do_klass(HotSpotMethodData_klass,               com_oracle_graal_hotspot_meta_HotSpotMethodData,              Opt) \
-  do_klass(HotSpotResolvedJavaField_klass,        com_oracle_graal_hotspot_meta_HotSpotResolvedJavaField,       Opt) \
   do_klass(HotSpotResolvedJavaMethod_klass,       com_oracle_graal_hotspot_meta_HotSpotResolvedJavaMethod,      Opt) \
   do_klass(HotSpotResolvedObjectType_klass,       com_oracle_graal_hotspot_meta_HotSpotResolvedObjectType,      Opt) \
   do_klass(HotSpotMonitorValue_klass,             com_oracle_graal_hotspot_meta_HotSpotMonitorValue,            Opt) \
-  do_klass(LocalImpl_klass,                       com_oracle_graal_hotspot_debug_LocalImpl,                     Opt) \
   do_klass(CompilerThread_klass,                  com_oracle_graal_hotspot_CompilerThread,                      Opt) \
   /* graal.api.code */                                                                                               \
   do_klass(Assumptions_klass,                     com_oracle_graal_api_code_Assumptions,                        Opt) \
@@ -211,6 +210,7 @@ class SymbolPropertyTable;
   do_klass(Assumptions_CallSiteTargetValue_klass, com_oracle_graal_api_code_Assumptions_CallSiteTargetValue,    Opt) \
   do_klass(BytecodePosition_klass,                com_oracle_graal_api_code_BytecodePosition,                   Opt) \
   do_klass(DebugInfo_klass,                       com_oracle_graal_api_code_DebugInfo,                          Opt) \
+  do_klass(ReferenceMap_klass,                    com_oracle_graal_api_code_ReferenceMap,                       Opt) \
   do_klass(RegisterSaveLayout_klass,              com_oracle_graal_api_code_RegisterSaveLayout,                 Opt) \
   do_klass(BytecodeFrame_klass,                   com_oracle_graal_api_code_BytecodeFrame,                      Opt) \
   do_klass(CompilationResult_klass,               com_oracle_graal_api_code_CompilationResult,                  Opt) \
@@ -226,6 +226,7 @@ class SymbolPropertyTable;
   do_klass(RegisterValue_klass,                   com_oracle_graal_api_code_RegisterValue,                      Opt) \
   do_klass(StackSlot_klass,                       com_oracle_graal_api_code_StackSlot,                          Opt) \
   do_klass(VirtualObject_klass,                   com_oracle_graal_api_code_VirtualObject,                      Opt) \
+  do_klass(SpeculationLog_klass,                  com_oracle_graal_api_code_SpeculationLog,                     Opt) \
   /* graal.api.meta */                                                                                               \
   do_klass(Constant_klass,                        com_oracle_graal_api_meta_Constant,                           Opt) \
   do_klass(ExceptionHandler_klass,                com_oracle_graal_api_meta_ExceptionHandler,                   Opt) \
@@ -690,7 +691,7 @@ private:
   static void add_to_hierarchy(instanceKlassHandle k, TRAPS);
 
   // event based tracing
-  static void post_class_load_event(TracingTime start_time, instanceKlassHandle k,
+  static void post_class_load_event(const Ticks& start_time, instanceKlassHandle k,
                                     Handle initiating_loader);
   // We pass in the hashtable index so we can calculate it outside of
   // the SystemDictionary_lock.

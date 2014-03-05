@@ -28,11 +28,10 @@ import java.util.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
-import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.Graph.Mark;
+import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.iterators.*;
 import com.oracle.graal.nodes.*;
-import com.oracle.graal.nodes.StructuredGraph.GuardsStage;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.cfg.*;
 import com.oracle.graal.nodes.extended.*;
@@ -64,6 +63,11 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
         }
 
         @Override
+        public LoweringStage getLoweringStage() {
+            return loweringStage;
+        }
+
+        @Override
         public ConstantReflectionProvider getConstantReflection() {
             return context.getConstantReflection();
         }
@@ -89,27 +93,8 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
         }
 
         @Override
-        public GuardingNode createNullCheckGuard(GuardedNode guardedNode, ValueNode object) {
-            if (ObjectStamp.isObjectNonNull(object)) {
-                // Short cut creation of null check guard if the object is known to be non-null.
-                return null;
-            }
-            StructuredGraph graph = guardedNode.asNode().graph();
-            if (graph.getGuardsStage().ordinal() > GuardsStage.FLOATING_GUARDS.ordinal()) {
-                NullCheckNode nullCheck = graph.add(new NullCheckNode(object));
-                graph.addBeforeFixed((FixedNode) guardedNode, nullCheck);
-                return nullCheck;
-            } else {
-                GuardingNode guard = createGuard(graph.unique(new IsNullNode(object)), DeoptimizationReason.NullCheckException, DeoptimizationAction.InvalidateReprofile, true);
-                assert guardedNode.getGuard() == null;
-                guardedNode.setGuard(guard);
-                return guard;
-            }
-        }
-
-        @Override
-        public GuardingNode createGuard(LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action) {
-            return createGuard(condition, deoptReason, action, false);
+        public GuardingNode createGuard(FixedNode before, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action) {
+            return createGuard(before, condition, deoptReason, action, false);
         }
 
         @Override
@@ -117,11 +102,32 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
             return context.getAssumptions();
         }
 
-        @Override
-        public GuardingNode createGuard(LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, boolean negated) {
-            if (condition.graph().getGuardsStage().ordinal() > StructuredGraph.GuardsStage.FLOATING_GUARDS.ordinal()) {
-                throw new GraalInternalError("Cannot create guards after guard lowering");
+        private class DummyGuardHandle extends ValueNode implements GuardedNode {
+            @Input private GuardingNode guard;
+
+            public DummyGuardHandle(GuardingNode guard) {
+                super(StampFactory.forVoid());
+                this.guard = guard;
             }
+
+            public GuardingNode getGuard() {
+                return guard;
+            }
+
+            public void setGuard(GuardingNode guard) {
+                updateUsages(this.guard == null ? null : this.guard.asNode(), guard == null ? null : guard.asNode());
+                this.guard = guard;
+            }
+
+            @Override
+            public ValueNode asNode() {
+                return this;
+            }
+
+        }
+
+        @Override
+        public GuardingNode createGuard(FixedNode before, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, boolean negated) {
             if (OptEliminateGuards.getValue()) {
                 for (Node usage : condition.usages()) {
                     if (!activeGuards.isNew(usage) && activeGuards.isMarked(usage) && ((GuardNode) usage).negated() == negated) {
@@ -129,12 +135,21 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
                     }
                 }
             }
-            GuardNode newGuard = guardAnchor.asNode().graph().unique(new GuardNode(condition, guardAnchor, deoptReason, action, negated));
-            if (OptEliminateGuards.getValue()) {
-                activeGuards.grow();
-                activeGuards.mark(newGuard);
+            StructuredGraph graph = before.graph();
+            if (condition.graph().getGuardsStage().ordinal() >= StructuredGraph.GuardsStage.FIXED_DEOPTS.ordinal()) {
+                FixedGuardNode fixedGuard = graph.add(new FixedGuardNode(condition, deoptReason, action, negated));
+                graph.addBeforeFixed(before, fixedGuard);
+                DummyGuardHandle handle = graph.add(new DummyGuardHandle(fixedGuard));
+                fixedGuard.lower(this);
+                return handle.getGuard();
+            } else {
+                GuardNode newGuard = graph.unique(new GuardNode(condition, guardAnchor, deoptReason, action, negated, Constant.NULL_OBJECT));
+                if (OptEliminateGuards.getValue()) {
+                    activeGuards.grow();
+                    activeGuards.mark(newGuard);
+                }
+                return newGuard;
             }
-            return newGuard;
         }
 
         @Override
@@ -153,9 +168,11 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
     }
 
     private final CanonicalizerPhase canonicalizer;
+    private final LoweringTool.LoweringStage loweringStage;
 
-    public LoweringPhase(CanonicalizerPhase canonicalizer) {
+    public LoweringPhase(CanonicalizerPhase canonicalizer, LoweringTool.LoweringStage loweringStage) {
         this.canonicalizer = canonicalizer;
+        this.loweringStage = loweringStage;
     }
 
     /**
@@ -192,12 +209,22 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
      * 
      * @param node a node that was just lowered
      * @param preLoweringMark the graph mark before {@code node} was lowered
+     * @param unscheduledUsages set of {@code node}'s usages that were unscheduled before it was
+     *            lowered
      * @throws AssertionError if the check fails
      */
-    private static boolean checkPostNodeLowering(Node node, LoweringToolImpl loweringTool, Mark preLoweringMark) {
+    private static boolean checkPostNodeLowering(Node node, LoweringToolImpl loweringTool, Mark preLoweringMark, Collection<Node> unscheduledUsages) {
         StructuredGraph graph = (StructuredGraph) node.graph();
         Mark postLoweringMark = graph.getMark();
         NodeIterable<Node> newNodesAfterLowering = graph.getNewNodes(preLoweringMark);
+        if (node instanceof FloatingNode) {
+            if (!unscheduledUsages.isEmpty()) {
+                for (Node n : newNodesAfterLowering) {
+                    assert !(n instanceof FixedNode) : node.graph() + ": cannot lower floatable node " + node + " as it introduces fixed node(s) but has the following unscheduled usages: " +
+                                    unscheduledUsages;
+                }
+            }
+        }
         for (Node n : newNodesAfterLowering) {
             if (n instanceof Lowerable) {
                 ((Lowerable) n).lower(loweringTool);
@@ -280,13 +307,14 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
                 }
 
                 if (node instanceof Lowerable) {
-                    assert checkUsagesAreScheduled(node);
+                    Collection<Node> unscheduledUsages = null;
+                    assert (unscheduledUsages = getUnscheduledUsages(node)) != null;
                     Mark preLoweringMark = node.graph().getMark();
                     ((Lowerable) node).lower(loweringTool);
-                    if (node == startAnchor && node.isDeleted()) {
+                    if (loweringTool.guardAnchor.asNode().isDeleted()) {
                         loweringTool.guardAnchor = BeginNode.prevBegin(nextNode);
                     }
-                    assert checkPostNodeLowering(node, loweringTool, preLoweringMark);
+                    assert checkPostNodeLowering(node, loweringTool, preLoweringMark, unscheduledUsages);
                 }
 
                 if (!nextNode.isAlive()) {
@@ -313,7 +341,7 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
         }
 
         /**
-         * Checks that all usages of a floating, lowerable node are scheduled.
+         * Gets all usages of a floating, lowerable node that are unscheduled.
          * <p>
          * Given that the lowering of such nodes may introduce fixed nodes, they must be lowered in
          * the context of a usage that dominates all other usages. The fixed nodes resulting from
@@ -322,16 +350,19 @@ public class LoweringPhase extends BasePhase<PhaseContext> {
          * 
          * @param node a {@link Lowerable} node
          */
-        private boolean checkUsagesAreScheduled(Node node) {
+        private Collection<Node> getUnscheduledUsages(Node node) {
+            List<Node> unscheduledUsages = new ArrayList<>();
             if (node instanceof FloatingNode) {
                 for (Node usage : node.usages()) {
                     if (usage instanceof ScheduledNode) {
                         Block usageBlock = schedule.getCFG().blockFor(usage);
-                        assert usageBlock != null : node.graph() + ": cannot lower floatable node " + node + " that has non-scheduled usage " + usage;
+                        if (usageBlock == null) {
+                            unscheduledUsages.add(usage);
+                        }
                     }
                 }
             }
-            return true;
+            return unscheduledUsages;
         }
     }
 }

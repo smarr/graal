@@ -23,9 +23,10 @@
 package com.oracle.graal.hotspot.meta;
 
 import static com.oracle.graal.phases.GraalOptions.*;
-
 import com.oracle.graal.hotspot.*;
 import com.oracle.graal.hotspot.phases.*;
+import com.oracle.graal.java.*;
+import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.tiers.*;
 
 /**
@@ -34,10 +35,12 @@ import com.oracle.graal.phases.tiers.*;
 public class HotSpotSuitesProvider implements SuitesProvider {
 
     protected final Suites defaultSuites;
-    private final HotSpotGraalRuntime runtime;
+    protected final PhaseSuite<HighTierContext> defaultGraphBuilderSuite;
+    protected final HotSpotGraalRuntime runtime;
 
     public HotSpotSuitesProvider(HotSpotGraalRuntime runtime) {
         this.runtime = runtime;
+        this.defaultGraphBuilderSuite = createGraphBuilderSuite();
         defaultSuites = createSuites();
     }
 
@@ -45,10 +48,14 @@ public class HotSpotSuitesProvider implements SuitesProvider {
         return defaultSuites;
     }
 
+    public PhaseSuite<HighTierContext> getDefaultGraphBuilderSuite() {
+        return defaultGraphBuilderSuite;
+    }
+
     public Suites createSuites() {
         Suites ret = Suites.createDefaultSuites();
 
-        if (AOTCompilation.getValue()) {
+        if (ImmutableCode.getValue()) {
             // lowering introduces class constants, therefore it must be after lowering
             ret.getHighTier().appendPhase(new LoadJavaMirrorWithKlassPhase(runtime.getConfig().classMirrorOffset));
             if (VerifyPhases.getValue()) {
@@ -62,5 +69,11 @@ public class HotSpotSuitesProvider implements SuitesProvider {
         }
 
         return ret;
+    }
+
+    protected PhaseSuite<HighTierContext> createGraphBuilderSuite() {
+        PhaseSuite<HighTierContext> suite = new PhaseSuite<>();
+        suite.appendPhase(new GraphBuilderPhase(GraphBuilderConfiguration.getDefault()));
+        return suite;
     }
 }

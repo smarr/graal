@@ -51,9 +51,10 @@ public class PTXMemOp {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, PTXMacroAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, PTXMacroAssembler masm) {
             PTXAddress addr = address.toAddress();
             switch (kind) {
+                case Boolean:
                 case Byte:
                 case Short:
                 case Char:
@@ -87,7 +88,7 @@ public class PTXMemOp {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, PTXMacroAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, PTXMacroAssembler masm) {
             PTXAddress addr = address.toAddress();
             switch (kind) {
                 case Byte:
@@ -122,7 +123,7 @@ public class PTXMemOp {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, PTXMacroAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, PTXMacroAssembler masm) {
             PTXAddress addr = address.toAddress();
             switch (kind) {
                 case Byte:
@@ -159,7 +160,7 @@ public class PTXMemOp {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, PTXMacroAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, PTXMacroAssembler masm) {
             PTXAddress addr = address.toAddress();
             switch (kind) {
                 case Int:
@@ -191,7 +192,7 @@ public class PTXMemOp {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, PTXMacroAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, PTXMacroAssembler masm) {
             PTXAddress addr = address.toAddress();
 
             switch (kind) {

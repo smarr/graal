@@ -32,6 +32,7 @@ import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
 
@@ -153,14 +154,18 @@ public class ConditionalEliminationTest extends GraalCompilerTest {
 
     @SuppressWarnings("unused")
     public static int testDisjunctionSnippet(Object a) {
-        if (a instanceof Integer) {
-            if (a == null) {
-                return -1;
+        try {
+            if (a instanceof Integer) {
+                if (a == null) {
+                    return -1;
+                } else {
+                    return 2;
+                }
             } else {
-                return 2;
+                return 3;
             }
-        } else {
-            return 3;
+        } finally {
+            field = null;
         }
     }
 
@@ -170,7 +175,7 @@ public class ConditionalEliminationTest extends GraalCompilerTest {
         new CanonicalizerPhase(true).apply(graph, new PhaseContext(getProviders(), null));
         IfNode ifNode = (IfNode) graph.start().next();
         InstanceOfNode instanceOf = (InstanceOfNode) ifNode.condition();
-        IsNullNode x = graph.unique(new IsNullNode(graph.getLocal(0)));
+        IsNullNode x = graph.unique(new IsNullNode(graph.getParameter(0)));
         InstanceOfNode y = instanceOf;
         ShortCircuitOrNode disjunction = graph.unique(new ShortCircuitOrNode(x, false, y, false, NOT_FREQUENT_PROBABILITY));
         LogicNegationNode negation = graph.unique(new LogicNegationNode(disjunction));
@@ -259,7 +264,7 @@ public class ConditionalEliminationTest extends GraalCompilerTest {
         CanonicalizerPhase canonicalizer = new CanonicalizerPhase(true);
         PhaseContext context = new PhaseContext(getProviders(), null);
 
-        new LoweringPhase(canonicalizer).apply(graph, context);
+        new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.HIGH_TIER).apply(graph, context);
         canonicalizer.apply(graph, context);
         new ConditionalEliminationPhase(getMetaAccess()).apply(graph);
         canonicalizer.apply(graph, context);

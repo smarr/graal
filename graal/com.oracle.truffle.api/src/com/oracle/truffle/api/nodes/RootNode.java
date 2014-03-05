@@ -24,21 +24,91 @@
  */
 package com.oracle.truffle.api.nodes;
 
+import java.util.*;
+
 import com.oracle.truffle.api.*;
+import com.oracle.truffle.api.CompilerDirectives.*;
 import com.oracle.truffle.api.frame.*;
 
 /**
  * A root node is a node with a method to execute it given only a frame as a parameter. Therefore, a
  * root node can be used to create a call target using
- * {@link TruffleRuntime#createCallTarget(RootNode, FrameDescriptor)}.
+ * {@link TruffleRuntime#createCallTarget(RootNode)}.
  */
 public abstract class RootNode extends Node {
 
+    private CallTarget callTarget;
+    private final FrameDescriptor frameDescriptor;
+
+    /*
+     * Internal field to keep reference to the inlined call node. The inlined parent should not be
+     * the same as the Node parent to keep the same tree hierarchy if inlined vs not inlined.
+     */
+    @CompilationFinal private List<CallNode> parentInlinedCalls = new ArrayList<>();
+
     protected RootNode() {
+        this(null, null);
     }
 
     protected RootNode(SourceSection sourceSection) {
+        this(sourceSection, null);
+    }
+
+    protected RootNode(SourceSection sourceSection, FrameDescriptor frameDescriptor) {
         super(sourceSection);
+        if (frameDescriptor == null) {
+            this.frameDescriptor = new FrameDescriptor();
+        } else {
+            this.frameDescriptor = frameDescriptor;
+        }
+    }
+
+    /**
+     * @deprecated Not required anymore. Do not use.
+     */
+    @Deprecated
+    public RootNode inline() {
+        if (!isInlinable()) {
+            throw new UnsupportedOperationException("Inlining is not enabled.");
+        }
+        return split();
+    }
+
+    /**
+     * @deprecated Not required anymore. Do not use.
+     */
+    @Deprecated
+    public int getInlineNodeCount() {
+        return 0;
+    }
+
+    /**
+     * @deprecated Not required anymore. Do not use.
+     */
+    @Deprecated
+    public boolean isInlinable() {
+        return true;
+    }
+
+    public RootNode split() {
+        return NodeUtil.cloneNode(this);
+    }
+
+    public boolean isSplittable() {
+        return false;
+    }
+
+    /**
+     * Reports the execution count of a loop that is a child of this node. The optimization
+     * heuristics can use the loop count to guide compilation and inlining.
+     */
+    public void reportLoopCount(int count) {
+        List<CallTarget> callTargets = NodeUtil.findOutermostCallTargets(this);
+        for (CallTarget target : callTargets) {
+            if (target instanceof LoopCountReceiver) {
+                ((LoopCountReceiver) target).reportLoopCount(count);
+            }
+        }
     }
 
     /**
@@ -49,13 +119,32 @@ public abstract class RootNode extends Node {
      */
     public abstract Object execute(VirtualFrame frame);
 
-    private CallTarget callTarget;
-
     public CallTarget getCallTarget() {
         return callTarget;
     }
 
+    public final FrameDescriptor getFrameDescriptor() {
+        return frameDescriptor;
+    }
+
     public void setCallTarget(CallTarget callTarget) {
         this.callTarget = callTarget;
+    }
+
+    /* Internal API. Do not use. */
+    void addParentInlinedCall(CallNode inlinedParent) {
+        this.parentInlinedCalls.add(inlinedParent);
+    }
+
+    public final List<CallNode> getParentInlinedCalls() {
+        return Collections.unmodifiableList(parentInlinedCalls);
+    }
+
+    /**
+     * @deprecated use {@link #getParentInlinedCalls()} instead.
+     */
+    @Deprecated
+    public final CallNode getParentInlinedCall() {
+        return parentInlinedCalls.isEmpty() ? null : parentInlinedCalls.get(0);
     }
 }

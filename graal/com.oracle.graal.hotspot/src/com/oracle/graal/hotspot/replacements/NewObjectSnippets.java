@@ -46,6 +46,7 @@ import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.debug.*;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.*;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.options.*;
 import com.oracle.graal.phases.util.*;
@@ -112,9 +113,24 @@ public class NewObjectSnippets implements Snippets {
         }
     }
 
+    private static void emitPrefetchAllocate(Word address, boolean isArray) {
+        if (config().allocatePrefetchStyle > 0) {
+            // Insert a prefetch for each allocation only on the fast-path
+            // Generate several prefetch instructions.
+            int lines = isArray ? config().allocatePrefetchLines : config().allocateInstancePrefetchLines;
+            int stepSize = config().allocatePrefetchStepSize;
+            int distance = config().allocatePrefetchDistance;
+            ExplodeLoopNode.explodeLoop();
+            for (int i = 0; i < lines; i++) {
+                PrefetchAllocateNode.prefetch(address, Word.signed(distance));
+                distance += stepSize;
+            }
+        }
+    }
+
     @Snippet
     public static Object allocateInstance(@ConstantParameter int size, Word hub, Word prototypeMarkWord, @ConstantParameter boolean fillContents, @ConstantParameter Register threadRegister,
-                    @ConstantParameter String typeContext) {
+                    @ConstantParameter boolean constantSize, @ConstantParameter String typeContext) {
         Object result;
         Word thread = registerAsWord(threadRegister);
         Word top = readTlabTop(thread);
@@ -122,13 +138,35 @@ public class NewObjectSnippets implements Snippets {
         Word newTop = top.add(size);
         if (useTLAB() && probability(FAST_PATH_PROBABILITY, newTop.belowOrEqual(end))) {
             writeTlabTop(thread, newTop);
-            result = formatObject(hub, size, top, prototypeMarkWord, fillContents);
+            emitPrefetchAllocate(newTop, false);
+            result = formatObject(hub, size, top, prototypeMarkWord, fillContents, constantSize);
         } else {
             new_stub.inc();
             result = NewInstanceStubCall.call(hub);
         }
         profileAllocation("instance", size, typeContext);
         return piCast(verifyOop(result), StampFactory.forNodeIntrinsic());
+    }
+
+    @Snippet
+    public static Object allocateInstanceDynamic(Class<?> type, @ConstantParameter boolean fillContents, @ConstantParameter Register threadRegister, @ConstantParameter String typeContext) {
+        Word hub = loadWordFromObject(type, klassOffset());
+        if (probability(FAST_PATH_PROBABILITY, !hub.equal(Word.zero()))) {
+            if (probability(FAST_PATH_PROBABILITY, isKlassFullyInitialized(hub))) {
+                int layoutHelper = readLayoutHelper(hub);
+                /*
+                 * src/share/vm/oops/klass.hpp: For instances, layout helper is a positive number,
+                 * the instance size. This size is already passed through align_object_size and
+                 * scaled to bytes. The low order bit is set if instances of this class cannot be
+                 * allocated using the fastpath.
+                 */
+                if (probability(FAST_PATH_PROBABILITY, (layoutHelper & 1) == 0)) {
+                    Word prototypeMarkWord = hub.readWord(prototypeMarkWordOffset(), PROTOTYPE_MARK_WORD_LOCATION);
+                    return allocateInstance(layoutHelper, hub, prototypeMarkWord, fillContents, threadRegister, false, typeContext);
+                }
+            }
+        }
+        return dynamicNewInstanceStub(type);
     }
 
     /**
@@ -157,6 +195,7 @@ public class NewObjectSnippets implements Snippets {
         Word newTop = top.add(allocationSize);
         if (useTLAB() && probability(FAST_PATH_PROBABILITY, newTop.belowOrEqual(end))) {
             writeTlabTop(thread, newTop);
+            emitPrefetchAllocate(newTop, true);
             newarray_loopInit.inc();
             result = formatArray(hub, allocationSize, length, headerSize, top, prototypeMarkWord, fillContents);
         } else {
@@ -168,9 +207,17 @@ public class NewObjectSnippets implements Snippets {
     }
 
     public static final ForeignCallDescriptor DYNAMIC_NEW_ARRAY = new ForeignCallDescriptor("dynamic_new_array", Object.class, Class.class, int.class);
+    public static final ForeignCallDescriptor DYNAMIC_NEW_INSTANCE = new ForeignCallDescriptor("dynamic_new_instance", Object.class, Class.class);
 
     @NodeIntrinsic(ForeignCallNode.class)
     public static native Object dynamicNewArrayStub(@ConstantNodeParameter ForeignCallDescriptor descriptor, Class<?> elementType, int length);
+
+    public static Object dynamicNewInstanceStub(Class<?> elementType) {
+        return dynamicNewInstanceStubCall(DYNAMIC_NEW_INSTANCE, elementType);
+    }
+
+    @NodeIntrinsic(ForeignCallNode.class)
+    public static native Object dynamicNewInstanceStubCall(@ConstantNodeParameter ForeignCallDescriptor descriptor, Class<?> elementType);
 
     @Snippet
     public static Object allocateArrayDynamic(Class<?> elementType, int length, @ConstantParameter boolean fillContents, @ConstantParameter Register threadRegister) {
@@ -238,21 +285,18 @@ public class NewObjectSnippets implements Snippets {
     /**
      * Formats some allocated memory with an object header zeroes out the rest.
      */
-    private static Object formatObject(Word hub, int size, Word memory, Word compileTimePrototypeMarkWord, boolean fillContents) {
+    private static Object formatObject(Word hub, int size, Word memory, Word compileTimePrototypeMarkWord, boolean fillContents, boolean constantSize) {
         Word prototypeMarkWord = useBiasedLocking() ? hub.readWord(prototypeMarkWordOffset(), PROTOTYPE_MARK_WORD_LOCATION) : compileTimePrototypeMarkWord;
         initializeObjectHeader(memory, prototypeMarkWord, hub);
         if (fillContents) {
-            if (size <= MAX_UNROLLED_OBJECT_ZEROING_SIZE) {
+            if (constantSize && size <= MAX_UNROLLED_OBJECT_ZEROING_SIZE) {
                 new_seqInit.inc();
                 explodeLoop();
-                for (int offset = instanceHeaderSize(); offset < size; offset += wordSize()) {
-                    memory.initializeWord(offset, Word.zero(), INIT_LOCATION);
-                }
             } else {
                 new_loopInit.inc();
-                for (int offset = instanceHeaderSize(); offset < size; offset += wordSize()) {
-                    memory.initializeWord(offset, Word.zero(), INIT_LOCATION);
-                }
+            }
+            for (int offset = instanceHeaderSize(); offset < size; offset += wordSize()) {
+                memory.initializeWord(offset, Word.zero(), INIT_LOCATION);
             }
         }
         return memory.toObject();
@@ -281,6 +325,7 @@ public class NewObjectSnippets implements Snippets {
         private final SnippetInfo allocateInstance = snippet(NewObjectSnippets.class, "allocateInstance");
         private final SnippetInfo allocateArray = snippet(NewObjectSnippets.class, "allocateArray");
         private final SnippetInfo allocateArrayDynamic = snippet(NewObjectSnippets.class, "allocateArrayDynamic");
+        private final SnippetInfo allocateInstanceDynamic = snippet(NewObjectSnippets.class, "allocateInstanceDynamic");
         private final SnippetInfo newmultiarray = snippet(NewObjectSnippets.class, "newmultiarray");
 
         public Templates(Providers providers, TargetDescription target) {
@@ -290,19 +335,20 @@ public class NewObjectSnippets implements Snippets {
         /**
          * Lowers a {@link NewInstanceNode}.
          */
-        public void lower(NewInstanceNode newInstanceNode, HotSpotRegistersProvider registers) {
+        public void lower(NewInstanceNode newInstanceNode, HotSpotRegistersProvider registers, LoweringTool tool) {
             StructuredGraph graph = newInstanceNode.graph();
             HotSpotResolvedObjectType type = (HotSpotResolvedObjectType) newInstanceNode.instanceClass();
             assert !type.isArray();
             ConstantNode hub = ConstantNode.forConstant(type.klass(), providers.getMetaAccess(), graph);
             int size = instanceSize(type);
 
-            Arguments args = new Arguments(allocateInstance, graph.getGuardsStage());
+            Arguments args = new Arguments(allocateInstance, graph.getGuardsStage(), tool.getLoweringStage());
             args.addConst("size", size);
             args.add("hub", hub);
             args.add("prototypeMarkWord", type.prototypeMarkWord());
             args.addConst("fillContents", newInstanceNode.fillContents());
             args.addConst("threadRegister", registers.getThreadRegister());
+            args.addConst("constantSize", true);
             args.addConst("typeContext", ProfileAllocations.getValue() ? toJavaName(type, false) : "");
 
             SnippetTemplate template = template(args);
@@ -313,7 +359,7 @@ public class NewObjectSnippets implements Snippets {
         /**
          * Lowers a {@link NewArrayNode}.
          */
-        public void lower(NewArrayNode newArrayNode, HotSpotRegistersProvider registers) {
+        public void lower(NewArrayNode newArrayNode, HotSpotRegistersProvider registers, LoweringTool tool) {
             StructuredGraph graph = newArrayNode.graph();
             ResolvedJavaType elementType = newArrayNode.elementType();
             HotSpotResolvedObjectType arrayType = (HotSpotResolvedObjectType) elementType.getArrayClass();
@@ -323,7 +369,7 @@ public class NewObjectSnippets implements Snippets {
             HotSpotLoweringProvider lowerer = (HotSpotLoweringProvider) providers.getLowerer();
             int log2ElementSize = CodeUtil.log2(lowerer.getScalingFactor(elementKind));
 
-            Arguments args = new Arguments(allocateArray, graph.getGuardsStage());
+            Arguments args = new Arguments(allocateArray, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("hub", hub);
             args.add("length", newArrayNode.length());
             args.add("prototypeMarkWord", arrayType.prototypeMarkWord());
@@ -338,8 +384,18 @@ public class NewObjectSnippets implements Snippets {
             template.instantiate(providers.getMetaAccess(), newArrayNode, DEFAULT_REPLACER, args);
         }
 
-        public void lower(DynamicNewArrayNode newArrayNode, HotSpotRegistersProvider registers) {
-            Arguments args = new Arguments(allocateArrayDynamic, newArrayNode.graph().getGuardsStage());
+        public void lower(DynamicNewInstanceNode newInstanceNode, HotSpotRegistersProvider registers, LoweringTool tool) {
+            Arguments args = new Arguments(allocateInstanceDynamic, newInstanceNode.graph().getGuardsStage(), tool.getLoweringStage());
+            args.add("type", newInstanceNode.getInstanceType());
+            args.addConst("fillContents", newInstanceNode.fillContents());
+            args.addConst("threadRegister", registers.getThreadRegister());
+
+            SnippetTemplate template = template(args);
+            template.instantiate(providers.getMetaAccess(), newInstanceNode, DEFAULT_REPLACER, args);
+        }
+
+        public void lower(DynamicNewArrayNode newArrayNode, HotSpotRegistersProvider registers, LoweringTool tool) {
+            Arguments args = new Arguments(allocateArrayDynamic, newArrayNode.graph().getGuardsStage(), tool.getLoweringStage());
             args.add("elementType", newArrayNode.getElementType());
             args.add("length", newArrayNode.length());
             args.addConst("fillContents", newArrayNode.fillContents());
@@ -349,7 +405,7 @@ public class NewObjectSnippets implements Snippets {
             template.instantiate(providers.getMetaAccess(), newArrayNode, DEFAULT_REPLACER, args);
         }
 
-        public void lower(NewMultiArrayNode newmultiarrayNode) {
+        public void lower(NewMultiArrayNode newmultiarrayNode, LoweringTool tool) {
             StructuredGraph graph = newmultiarrayNode.graph();
             int rank = newmultiarrayNode.dimensionCount();
             ValueNode[] dims = new ValueNode[rank];
@@ -359,7 +415,7 @@ public class NewObjectSnippets implements Snippets {
             HotSpotResolvedObjectType type = (HotSpotResolvedObjectType) newmultiarrayNode.type();
             ConstantNode hub = ConstantNode.forConstant(type.klass(), providers.getMetaAccess(), graph);
 
-            Arguments args = new Arguments(newmultiarray, graph.getGuardsStage());
+            Arguments args = new Arguments(newmultiarray, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("hub", hub);
             args.addConst("rank", rank);
             args.addVarargs("dimensions", int.class, StampFactory.forKind(Kind.Int), dims);

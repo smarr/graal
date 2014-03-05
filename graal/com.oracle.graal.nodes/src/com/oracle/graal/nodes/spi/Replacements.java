@@ -42,17 +42,28 @@ public interface Replacements {
     StructuredGraph getSnippet(ResolvedJavaMethod method);
 
     /**
+     * Gets the snippet graph derived from a given method.
+     * 
+     * @param recursiveEntry if the snippet contains a call to this method, it's considered as
+     *            recursive call and won't be processed for {@linkplain MethodSubstitution
+     *            substitutions} or {@linkplain MacroSubstitution macro nodes}.
+     * @return the snippet graph, if any, that is derived from {@code method}
+     */
+    StructuredGraph getSnippet(ResolvedJavaMethod method, ResolvedJavaMethod recursiveEntry);
+
+    /**
      * Registers a method as snippet.
      */
     void registerSnippet(ResolvedJavaMethod method);
 
     /**
-     * Prepares the copy of a snippet graph immediately after instantiation. This can be used to do
-     * node intrinsification for example.
+     * Notifies this object during snippet specialization once the specialized snippet's constant
+     * parameters have been replaced with constant values.
      * 
-     * @param snippetCopy The copy of the snippet graph.
+     * @param specializedSnippet the snippet in the process of being specialized. This is a copy of
+     *            the unspecialized snippet graph created during snippet preparation.
      */
-    void prepareSnippetCopyAfterInstantiation(StructuredGraph snippetCopy);
+    void notifyAfterConstantsBound(StructuredGraph specializedSnippet);
 
     /**
      * Gets the graph that is a substitution for a given method.

@@ -386,6 +386,9 @@ class CompileBroker: AllStatic {
                                  int hot_count,
                                  const char* comment, Thread* thread);
 
+  // Acquire any needed locks and assign a compile id
+  static uint assign_compile_id_unlocked(Thread* thread, methodHandle method, int osr_bci);
+
   static void compiler_thread_loop();
   static uint get_compilation_id() { return _compilation_id; }
 
@@ -434,7 +437,7 @@ class CompileBroker: AllStatic {
   static void mark_on_stack();
 
   // Print a detailed accounting of compilation time
-  static void print_times();
+  static void print_times(bool per_compiler = true, bool aggregate = true);
 
   // Debugging output for failure
   static void print_last_compile();

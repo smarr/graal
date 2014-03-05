@@ -24,7 +24,6 @@ package com.oracle.graal.hotspot.amd64;
 
 import static com.oracle.graal.hotspot.HotSpotGraalRuntime.*;
 import static com.oracle.graal.lir.LIRInstruction.OperandFlag.*;
-import static com.oracle.graal.phases.GraalOptions.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
@@ -49,10 +48,11 @@ final class AMD64HotSpotReturnOp extends AMD64HotSpotEpilogueOp {
     }
 
     @Override
-    public void emitCode(TargetMethodAssembler tasm, AMD64MacroAssembler masm) {
-        leaveFrameAndRestoreRbp(tasm, masm);
-        if (!isStub && (tasm.frameContext != null || !OptEliminateSafepoints.getValue())) {
-            AMD64HotSpotSafepointOp.emitCode(tasm, masm, runtime().getConfig(), true, null, scratchForSafepointOnReturn);
+    public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
+        leaveFrameAndRestoreRbp(crb, masm);
+        if (!isStub) {
+            // Every non-stub compile method must have a poll before the return.
+            AMD64HotSpotSafepointOp.emitCode(crb, masm, runtime().getConfig(), true, null, scratchForSafepointOnReturn);
         }
         masm.ret(0);
     }

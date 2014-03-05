@@ -37,6 +37,7 @@ import com.oracle.graal.hotspot.nodes.*;
 import com.oracle.graal.hotspot.phases.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.extended.*;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.graph.*;
@@ -546,7 +547,7 @@ public class WriteBarrierVerificationTest extends GraalCompilerTest {
         test("test11Snippet", 11, new int[]{5});
     }
 
-    @Test(expected = AssertionError.class)
+    @Test
     public void test56() {
         test("test11Snippet", 11, new int[]{11});
     }
@@ -612,15 +613,15 @@ public class WriteBarrierVerificationTest extends GraalCompilerTest {
     private void test(final String snippet, final int expectedBarriers, final int... removedBarrierIndices) {
         try (Scope d = Debug.scope("WriteBarrierVerificationTest", new DebugDumpScope(snippet))) {
             final StructuredGraph graph = parse(snippet);
-            HighTierContext highTierContext = new HighTierContext(getProviders(), new Assumptions(false), null, getDefaultPhasePlan(), OptimisticOptimizations.ALL);
+            HighTierContext highTierContext = new HighTierContext(getProviders(), new Assumptions(false), null, getDefaultGraphBuilderSuite(), OptimisticOptimizations.ALL);
             new InliningPhase(new CanonicalizerPhase(true)).apply(graph, highTierContext);
 
-            MidTierContext midTierContext = new MidTierContext(getProviders(), new Assumptions(false), getCodeCache().getTarget(), OptimisticOptimizations.ALL);
+            MidTierContext midTierContext = new MidTierContext(getProviders(), new Assumptions(false), getCodeCache().getTarget(), OptimisticOptimizations.ALL, graph.method().getProfilingInfo(), null);
 
-            new LoweringPhase(new CanonicalizerPhase(true)).apply(graph, highTierContext);
+            new LoweringPhase(new CanonicalizerPhase(true), LoweringTool.StandardLoweringStage.HIGH_TIER).apply(graph, highTierContext);
             new GuardLoweringPhase().apply(graph, midTierContext);
             new LoopSafepointInsertionPhase().apply(graph);
-            new LoweringPhase(new CanonicalizerPhase(true)).apply(graph, highTierContext);
+            new LoweringPhase(new CanonicalizerPhase(true), LoweringTool.StandardLoweringStage.MID_TIER).apply(graph, highTierContext);
 
             new WriteBarrierAdditionPhase().apply(graph);
 

@@ -25,6 +25,7 @@ package com.oracle.graal.api.code;
 import static java.util.Collections.*;
 
 import java.io.*;
+import java.nio.*;
 import java.util.*;
 
 import com.oracle.graal.api.meta.*;
@@ -137,51 +138,169 @@ public class CompilationResult implements Serializable {
     }
 
     /**
-     * Represents a reference to data from the code. The associated data can be either a
-     * {@link Constant} or a raw byte array. The raw byte array is patched as is, no endian swapping
-     * is done on it.
+     * Represents some external data that is referenced by the code.
+     */
+    public abstract static class Data {
+
+        private final int alignment;
+
+        protected Data(int alignment) {
+            this.alignment = alignment;
+        }
+
+        public int getAlignment() {
+            return alignment;
+        }
+
+        public abstract int getSize(Architecture arch);
+
+        public abstract void emit(Architecture arch, ByteBuffer buffer);
+    }
+
+    public static final class ConstantData extends Data {
+
+        public final Constant constant;
+
+        public ConstantData(Constant constant, int alignment) {
+            super(alignment);
+            this.constant = constant;
+        }
+
+        @Override
+        public int getSize(Architecture arch) {
+            return arch.getSizeInBytes(constant.getPlatformKind());
+        }
+
+        @Override
+        public void emit(Architecture arch, ByteBuffer buffer) {
+            switch (constant.getKind()) {
+                case Boolean:
+                    assert getSize(arch) == 1;
+                    buffer.put(constant.asBoolean() ? (byte) 1 : (byte) 0);
+                    break;
+                case Byte:
+                    assert getSize(arch) == 1;
+                    buffer.put((byte) constant.asInt());
+                    break;
+                case Char:
+                    assert getSize(arch) == 2;
+                    buffer.putChar((char) constant.asInt());
+                    break;
+                case Short:
+                    assert getSize(arch) == 2;
+                    buffer.putShort((short) constant.asInt());
+                    break;
+                case Int:
+                    assert getSize(arch) == 4;
+                    buffer.putInt(constant.asInt());
+                    break;
+                case Long:
+                    assert getSize(arch) == 8;
+                    buffer.putLong(constant.asLong());
+                    break;
+                case Float:
+                    assert getSize(arch) == 4;
+                    buffer.putFloat(constant.asFloat());
+                    break;
+                case Double:
+                    assert getSize(arch) == 8;
+                    buffer.putDouble(constant.asDouble());
+                    break;
+                case Object:
+                    // placeholder for oop value
+                    for (int i = 0; i < getSize(arch); i++) {
+                        buffer.put((byte) 0);
+                    }
+                    break;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return constant.toString();
+        }
+    }
+
+    public static final class RawData extends Data {
+
+        public final byte[] data;
+
+        public RawData(byte[] data, int alignment) {
+            super(alignment);
+            this.data = data;
+        }
+
+        @Override
+        public int getSize(Architecture arch) {
+            return data.length;
+        }
+
+        @Override
+        public void emit(Architecture arch, ByteBuffer buffer) {
+            buffer.put(data);
+        }
+
+        @Override
+        public String toString() {
+            Formatter ret = new Formatter();
+            boolean first = true;
+            for (byte b : data) {
+                ret.format(first ? "%02X" : " %02X", b);
+                first = false;
+            }
+            return ret.toString();
+        }
+    }
+
+    /**
+     * Represents a code site that references some data. The associated data can be either a
+     * reference to an external {@link Data} item in the data section, or it may be an inlined
+     * {@link Constant} that needs to be patched.
      */
     public static final class DataPatch extends Site {
 
         private static final long serialVersionUID = 5771730331604867476L;
-        public final Constant constant;
-        public final byte[] rawConstant;
-        public final int alignment;
+        public Data externalData;
+        public Constant inlineData;
 
-        /**
-         * Determines if the data is encoded inline or is loaded from a separate data area.
-         */
-        public final boolean inlined;
-
-        DataPatch(int pcOffset, byte[] data, int alignment) {
-            this(pcOffset, null, data, alignment, false);
+        DataPatch(int pcOffset, Data externalData) {
+            this(pcOffset, externalData, null);
         }
 
-        DataPatch(int pcOffset, Constant data, int alignment, boolean inlined) {
-            this(pcOffset, data, null, alignment, inlined);
+        DataPatch(int pcOffset, Constant inlineData) {
+            this(pcOffset, null, inlineData);
         }
 
-        private DataPatch(int pcOffset, Constant data, byte[] rawData, int alignment, boolean inlined) {
+        private DataPatch(int pcOffset, Data externalData, Constant inlineData) {
             super(pcOffset);
-            assert (data == null) != (rawData == null) : "only one of data and rawData is allowed";
-            assert !inlined || rawData == null : "rawData can not be inlined";
-            this.constant = data;
-            this.rawConstant = rawData;
-            this.alignment = alignment;
-            this.inlined = inlined;
+            assert (externalData == null) != (inlineData == null) : "data patch can not be both external and inlined";
+            this.externalData = externalData;
+            this.inlineData = inlineData;
+        }
+
+        public Constant getConstant() {
+            if (inlineData != null) {
+                return inlineData;
+            } else if (externalData instanceof ConstantData) {
+                return ((ConstantData) externalData).constant;
+            } else {
+                return null;
+            }
+        }
+
+        public int getAlignment() {
+            if (externalData instanceof ConstantData) {
+                return ((ConstantData) externalData).getAlignment();
+            } else {
+                return 0;
+            }
         }
 
         public String getDataString() {
-            if (constant != null) {
-                return constant.toString();
+            if (inlineData != null) {
+                return inlineData.toString();
             } else {
-                Formatter ret = new Formatter();
-                boolean first = true;
-                for (byte b : rawConstant) {
-                    ret.format(first ? "%02X" : " %02X", b);
-                    first = false;
-                }
-                return ret.toString();
+                return externalData.toString();
             }
         }
 
@@ -317,6 +436,9 @@ public class CompilationResult implements Serializable {
         }
     }
 
+    private int id = -1;
+    private int entryBCI = -1;
+
     private final List<Infopoint> infopoints = new ArrayList<>();
     private final List<DataPatch> dataReferences = new ArrayList<>();
     private final List<ExceptionHandler> exceptionHandlers = new ArrayList<>();
@@ -355,6 +477,34 @@ public class CompilationResult implements Serializable {
 
     public CompilationResult(String name) {
         this.name = name;
+    }
+
+    /**
+     * @return the compile id
+     */
+    public int getId() {
+        return id;
+    }
+
+    /**
+     * @param id the compile id to set
+     */
+    public void setId(int id) {
+        this.id = id;
+    }
+
+    /**
+     * @return the entryBCI
+     */
+    public int getEntryBCI() {
+        return entryBCI;
+    }
+
+    /**
+     * @param entryBCI the entryBCI to set
+     */
+    public void setEntryBCI(int entryBCI) {
+        this.entryBCI = entryBCI;
     }
 
     public void setAssumptions(Assumptions assumptions) {
@@ -400,27 +550,21 @@ public class CompilationResult implements Serializable {
      * 
      * @param codePos the position in the code where the data reference occurs
      * @param data the data that is referenced
-     * @param alignment the alignment requirement of the data or 0 if there is no alignment
-     *            requirement
-     * @param inlined specifies if the data is encoded inline or is loaded from a separate data area
      */
-    public void recordDataReference(int codePos, Constant data, int alignment, boolean inlined) {
+    public void recordDataReference(int codePos, Data data) {
         assert codePos >= 0 && data != null;
-        dataReferences.add(new DataPatch(codePos, data, alignment, inlined));
+        dataReferences.add(new DataPatch(codePos, data));
     }
 
     /**
-     * Records a reference to the data section in the code section (e.g. to load an integer or
-     * floating point constant).
+     * Records a reference to an inlined constant in the code section (e.g. to load a constant oop).
      * 
-     * @param codePos the position in the code where the data reference occurs
-     * @param data a byte array containing the raw data that is referenced
-     * @param alignment the alignment requirement of the data or 0 if there is no alignment
-     *            requirement
+     * @param codePos the position in the code where the inlined constant occurs
+     * @param constant the constant that is referenced
      */
-    public void recordDataReference(int codePos, byte[] data, int alignment) {
-        assert codePos >= 0 && data != null && data.length > 0;
-        dataReferences.add(new DataPatch(codePos, data, alignment));
+    public void recordInlineData(int codePos, Constant constant) {
+        assert codePos >= 0 && constant != null;
+        dataReferences.add(new DataPatch(codePos, constant));
     }
 
     /**
@@ -470,11 +614,11 @@ public class CompilationResult implements Serializable {
      * Records an instruction mark within this method.
      * 
      * @param codePos the position in the code that is covered by the handler
-     * @param id the identifier for this mark
+     * @param markId the identifier for this mark
      * @param references an array of other marks that this mark references
      */
-    public Mark recordMark(int codePos, Object id, Mark[] references) {
-        Mark mark = new Mark(codePos, id, references);
+    public Mark recordMark(int codePos, Object markId, Mark[] references) {
+        Mark mark = new Mark(codePos, markId, references);
         marks.add(mark);
         return mark;
     }
@@ -560,8 +704,19 @@ public class CompilationResult implements Serializable {
 
     private static void appendDebugInfo(StringBuilder sb, DebugInfo info) {
         if (info != null) {
-            appendRefMap(sb, "stackMap", info.getFrameRefMap());
-            appendRefMap(sb, "registerMap", info.getRegisterRefMap());
+            ReferenceMap refMap = info.getReferenceMap();
+            if (refMap != null) {
+                if (refMap.hasFrameRefMap()) {
+                    sb.append(" stackMap[");
+                    refMap.appendFrameMap(sb, null);
+                    sb.append(']');
+                }
+                if (refMap.hasRegisterRefMap()) {
+                    sb.append(" registerMap[");
+                    refMap.appendRegisterMap(sb, null);
+                    sb.append(']');
+                }
+            }
             RegisterSaveLayout calleeSaveInfo = info.getCalleeSaveInfo();
             if (calleeSaveInfo != null) {
                 sb.append(" callee-save-info[");
@@ -582,12 +737,6 @@ public class CompilationResult implements Serializable {
                     }
                 }
             }
-        }
-    }
-
-    private static void appendRefMap(StringBuilder sb, String name, BitSet map) {
-        if (map != null) {
-            sb.append(' ').append(name).append('[').append(map.toString()).append(']');
         }
     }
 

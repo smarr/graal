@@ -24,6 +24,7 @@ package com.oracle.graal.hotspot;
 
 import static com.oracle.graal.graph.UnsafeAccess.*;
 import static com.oracle.graal.hotspot.HotSpotGraalRuntime.Options.*;
+import static com.oracle.graal.phases.GraalOptions.*;
 
 import java.lang.reflect.*;
 import java.util.*;
@@ -41,6 +42,8 @@ import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.options.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.runtime.*;
+
+//JaCoCo Exclude
 
 /**
  * Singleton class holding the instance of the {@link GraalRuntime}.
@@ -178,7 +181,6 @@ public final class HotSpotGraalRuntime implements GraalRuntime, RuntimeProvider 
     }
 
     protected/* final */CompilerToVM compilerToVm;
-    protected/* final */CompilerToGPU compilerToGpu;
     protected/* final */VMToCompiler vmToCompiler;
 
     private HotSpotRuntimeInterpreterInterface runtimeInterpreterInterface;
@@ -187,46 +189,52 @@ public final class HotSpotGraalRuntime implements GraalRuntime, RuntimeProvider 
     protected final HotSpotVMConfig config;
     private final HotSpotBackend hostBackend;
 
+    /**
+     * Graal mirrors are stored as a {@link ClassValue} associated with the {@link Class} of the
+     * type. This data structure stores both {@link HotSpotResolvedObjectType} and
+     * {@link HotSpotResolvedPrimitiveType} types.
+     */
+    private final ClassValue<ResolvedJavaType> graalMirrors = new ClassValue<ResolvedJavaType>() {
+        @Override
+        protected ResolvedJavaType computeValue(Class<?> javaClass) {
+            if (javaClass.isPrimitive()) {
+                Kind kind = Kind.fromJavaClass(javaClass);
+                return new HotSpotResolvedPrimitiveType(kind);
+            } else {
+                return new HotSpotResolvedObjectType(javaClass);
+            }
+        }
+    };
+
     private final Map<Class<? extends Architecture>, HotSpotBackend> backends = new HashMap<>();
 
     private HotSpotGraalRuntime() {
         CompilerToVM toVM = new CompilerToVMImpl();
-        CompilerToGPU toGPU = new CompilerToGPUImpl();
         VMToCompiler toCompiler = new VMToCompilerImpl(this);
 
         compilerToVm = toVM;
-        compilerToGpu = toGPU;
         vmToCompiler = toCompiler;
         config = new HotSpotVMConfig(compilerToVm);
 
-        // Set some global options:
-        if (config.compileTheWorld) {
-            GraalOptions.CompileTheWorld.setValue(CompileTheWorld.SUN_BOOT_CLASS_PATH);
-        }
-        if (config.compileTheWorldStartAt != 1) {
-            GraalOptions.CompileTheWorldStartAt.setValue(config.compileTheWorldStartAt);
-        }
-        if (config.compileTheWorldStopAt != Integer.MAX_VALUE) {
-            GraalOptions.CompileTheWorldStopAt.setValue(config.compileTheWorldStopAt);
-        }
+        CompileTheWorld.Options.overrideWithNativeOptions(config);
 
         // Only set HotSpotPrintCompilation and HotSpotPrintInlining if they still have their
         // default value (false).
-        if (GraalOptions.HotSpotPrintCompilation.getValue() == false) {
-            GraalOptions.HotSpotPrintCompilation.setValue(config.printCompilation);
+        if (HotSpotPrintCompilation.getValue() == false) {
+            HotSpotPrintCompilation.setValue(config.printCompilation);
         }
-        if (GraalOptions.HotSpotPrintInlining.getValue() == false) {
-            GraalOptions.HotSpotPrintInlining.setValue(config.printInlining);
+        if (HotSpotPrintInlining.getValue() == false) {
+            HotSpotPrintInlining.setValue(config.printInlining);
         }
 
         if (Boolean.valueOf(System.getProperty("graal.printconfig"))) {
             printConfig(config);
         }
 
-        String hostArchitecture = getHostArchitectureName();
+        String hostArchitecture = config.getHostArchitectureName();
         hostBackend = registerBackend(findFactory(hostArchitecture).createBackend(this, null));
 
-        String[] gpuArchitectures = getGPUArchitectureNames();
+        String[] gpuArchitectures = getGPUArchitectureNames(compilerToVm);
         for (String arch : gpuArchitectures) {
             HotSpotBackendFactory factory = findFactory(arch);
             if (factory == null) {
@@ -235,7 +243,6 @@ public final class HotSpotGraalRuntime implements GraalRuntime, RuntimeProvider 
             registerBackend(factory.createBackend(this, hostBackend));
         }
 
-        GraalOptions.StackShadowPages.setValue(config.stackShadowPages);
         if (GraalOptions.CacheGraphs.getValue()) {
             cache = new HotSpotGraphCache(compilerToVm);
         }
@@ -249,33 +256,24 @@ public final class HotSpotGraalRuntime implements GraalRuntime, RuntimeProvider 
     }
 
     /**
-     * Gets the host architecture name for the purpose of finding the corresponding
-     * {@linkplain HotSpotBackendFactory backend}.
+     * Gets the Graal mirror for a {@link Class} object.
+     * 
+     * @return the {@link HotSpotResolvedJavaType} corresponding to {@code javaClass}
      */
-    private static String getHostArchitectureName() {
-        String arch = System.getProperty("os.arch");
-        switch (arch) {
-            case "x86_64":
-                // This is what Mac OS X reports;
-                arch = "amd64";
-                break;
-        }
-        return arch;
+    public ResolvedJavaType fromClass(Class<?> javaClass) {
+        return graalMirrors.get(javaClass);
     }
 
     public static final String GRAAL_GPU_ISALIST_PROPERTY_NAME = "graal.gpu.isalist";
 
     /**
      * Gets the names of the supported GPU architectures for the purpose of finding the
-     * corresponding {@linkplain HotSpotBackendFactory backend} objects. This method first looks for
-     * a comma or {@link java.io.File#pathSeparatorChar} separated list of names in the
-     * {@value #GRAAL_GPU_ISALIST_PROPERTY_NAME} system property. If this property is not set, then
-     * the GPU native support code is queried.
+     * corresponding {@linkplain HotSpotBackendFactory backend} objects.
      */
-    private static String[] getGPUArchitectureNames() {
-        String gpuList = System.getProperty(GRAAL_GPU_ISALIST_PROPERTY_NAME);
-        if (gpuList != null && !gpuList.isEmpty()) {
-            String[] gpus = gpuList.split("[,:]");
+    private static String[] getGPUArchitectureNames(CompilerToVM c2vm) {
+        String gpuList = c2vm.getGPUs();
+        if (!gpuList.isEmpty()) {
+            String[] gpus = gpuList.split(",");
             return gpus;
         }
         return new String[0];
@@ -316,40 +314,36 @@ public final class HotSpotGraalRuntime implements GraalRuntime, RuntimeProvider 
         return vmToCompiler;
     }
 
-    public CompilerToGPU getCompilerToGPU() {
-        return compilerToGpu;
-    }
-
-    public JavaType lookupType(String name, HotSpotResolvedObjectType accessingClass, boolean eagerResolve) {
-        if (name.length() == 1 && vmToCompiler instanceof VMToCompilerImpl) {
-            VMToCompilerImpl impl = (VMToCompilerImpl) vmToCompiler;
+    /**
+     * Converts a name to a Java type.
+     * 
+     * @param name a well formed Java type in {@linkplain JavaType#getName() internal} format
+     * @param accessingType the context of resolution (may be null)
+     * @param eagerResolve force resolution to a {@link ResolvedJavaType}. If true, this method will
+     *            either return a {@link ResolvedJavaType} or throw an exception
+     * @return a Java type for {@code name} which is guaranteed to be of type
+     *         {@link ResolvedJavaType} if {@code eagerResolve == true}
+     * @throws LinkageError if {@code eagerResolve == true} and the resolution failed
+     */
+    public JavaType lookupType(String name, HotSpotResolvedObjectType accessingType, boolean eagerResolve) {
+        // If the name represents a primitive type we can short-circuit the lookup.
+        if (name.length() == 1) {
             Kind kind = Kind.fromPrimitiveOrVoidTypeChar(name.charAt(0));
-            switch (kind) {
-                case Boolean:
-                    return impl.typeBoolean;
-                case Byte:
-                    return impl.typeByte;
-                case Char:
-                    return impl.typeChar;
-                case Double:
-                    return impl.typeDouble;
-                case Float:
-                    return impl.typeFloat;
-                case Illegal:
-                    break;
-                case Int:
-                    return impl.typeInt;
-                case Long:
-                    return impl.typeLong;
-                case Object:
-                    break;
-                case Short:
-                    return impl.typeShort;
-                case Void:
-                    return impl.typeVoid;
-            }
+            return HotSpotResolvedPrimitiveType.fromKind(kind);
         }
-        return compilerToVm.lookupType(name, accessingClass, eagerResolve);
+
+        // Handle non-primitive types.
+        Class<?> accessingClass = null;
+        if (accessingType != null) {
+            accessingClass = accessingType.mirror();
+        }
+
+        // Resolve the type in the VM.
+        final long metaspaceKlass = compilerToVm.lookupType(name, accessingClass, eagerResolve);
+        if (metaspaceKlass == 0) {
+            return vmToCompiler.createUnresolvedJavaType(name);
+        }
+        return HotSpotResolvedObjectType.fromMetaspaceKlass(metaspaceKlass);
     }
 
     public HotSpotRuntimeInterpreterInterface getRuntimeInterpreterInterface() {

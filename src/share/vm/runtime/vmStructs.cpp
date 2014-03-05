@@ -390,9 +390,10 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
   nonstatic_field(ObjArrayKlass,               _element_klass,                                Klass*)                                \
   nonstatic_field(ObjArrayKlass,               _bottom_klass,                                 Klass*)                                \
   volatile_nonstatic_field(Symbol,             _refcount,                                     short)                                 \
-  nonstatic_field(Symbol,                      _identity_hash,                                int)                                   \
   nonstatic_field(Symbol,                      _length,                                       unsigned short)                        \
+  nonstatic_field(Symbol,                      _identity_hash,                                int)                                   \
   unchecked_nonstatic_field(Symbol,            _body,                                         sizeof(jbyte)) /* NOTE: no type */     \
+  nonstatic_field(Symbol,                      _body[0],                                      jbyte)                                 \
   nonstatic_field(TypeArrayKlass,              _max_length,                                   int)                                   \
                                                                                                                                      \
   /***********************/                                                                                                          \
@@ -566,8 +567,6 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
                                                                                                                                      \
   nonstatic_field(Space,                       _bottom,                                       HeapWord*)                             \
   nonstatic_field(Space,                       _end,                                          HeapWord*)                             \
-                                                                                                                                     \
-     static_field(HeapRegion,                  LogOfHRGrainBytes,                             int)                                   \
                                                                                                                                      \
   nonstatic_field(ThreadLocalAllocBuffer,      _start,                                        HeapWord*)                             \
   nonstatic_field(ThreadLocalAllocBuffer,      _top,                                          HeapWord*)                             \
@@ -812,6 +811,34 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
      static_field(StubRoutines,                _cipherBlockChaining_decryptAESCrypt,          address)                               \
      static_field(StubRoutines,                _updateBytesCRC32,                             address)                               \
      static_field(StubRoutines,                _crc_table_adr,                                address)                               \
+     static_field(StubRoutines,                _jbyte_arraycopy,                              address)                               \
+     static_field(StubRoutines,                _jshort_arraycopy,                             address)                               \
+     static_field(StubRoutines,                _jint_arraycopy,                               address)                               \
+     static_field(StubRoutines,                _jlong_arraycopy,                              address)                               \
+     static_field(StubRoutines,                _oop_arraycopy,                                address)                               \
+     static_field(StubRoutines,                _oop_arraycopy_uninit,                         address)                               \
+     static_field(StubRoutines,                _jbyte_disjoint_arraycopy,                     address)                               \
+     static_field(StubRoutines,                _jshort_disjoint_arraycopy,                    address)                               \
+     static_field(StubRoutines,                _jint_disjoint_arraycopy,                      address)                               \
+     static_field(StubRoutines,                _jlong_disjoint_arraycopy,                     address)                               \
+     static_field(StubRoutines,                _oop_disjoint_arraycopy,                       address)                               \
+     static_field(StubRoutines,                _oop_disjoint_arraycopy_uninit,                address)                               \
+     static_field(StubRoutines,                _arrayof_jbyte_arraycopy,                      address)                               \
+     static_field(StubRoutines,                _arrayof_jshort_arraycopy,                     address)                               \
+     static_field(StubRoutines,                _arrayof_jint_arraycopy,                       address)                               \
+     static_field(StubRoutines,                _arrayof_jlong_arraycopy,                      address)                               \
+     static_field(StubRoutines,                _arrayof_oop_arraycopy,                        address)                               \
+     static_field(StubRoutines,                _arrayof_oop_arraycopy_uninit,                 address)                               \
+     static_field(StubRoutines,                _arrayof_jbyte_disjoint_arraycopy,             address)                               \
+     static_field(StubRoutines,                _arrayof_jshort_disjoint_arraycopy,            address)                               \
+     static_field(StubRoutines,                _arrayof_jint_disjoint_arraycopy,              address)                               \
+     static_field(StubRoutines,                _arrayof_jlong_disjoint_arraycopy,             address)                               \
+     static_field(StubRoutines,                _arrayof_oop_disjoint_arraycopy,               address)                               \
+     static_field(StubRoutines,                _arrayof_oop_disjoint_arraycopy_uninit,        address)                               \
+     static_field(StubRoutines,                _checkcast_arraycopy,                          address)                               \
+     static_field(StubRoutines,                _checkcast_arraycopy_uninit,                   address)                               \
+     static_field(StubRoutines,                _unsafe_arraycopy,                             address)                               \
+     static_field(StubRoutines,                _generic_arraycopy,                            address)                               \
                                                                                                                                      \
   /*****************/                                                                                                                \
   /* SharedRuntime */                                                                                                                \
@@ -913,7 +940,6 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
      static_field(Threads,                     _return_code,                                  int)                                   \
                                                                                                                                      \
   nonstatic_field(ThreadShadow,                _pending_exception,                            oop)                                   \
-  nonstatic_field(ThreadShadow,                _pending_deoptimization,                       int)                                   \
   nonstatic_field(ThreadShadow,                _exception_file,                               const char*)                           \
   nonstatic_field(ThreadShadow,                _exception_line,                               int)                                   \
    volatile_nonstatic_field(Thread,            _suspend_flags,                                uint32_t)                              \
@@ -1505,8 +1531,6 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
            declare_type(EdenSpace,                    ContiguousSpace)    \
            declare_type(OffsetTableContigSpace,       ContiguousSpace)    \
            declare_type(TenuredSpace,                 OffsetTableContigSpace) \
-           declare_type(G1OffsetTableContigSpace,     ContiguousSpace)    \
-           declare_type(HeapRegion,                   G1OffsetTableContigSpace) \
   declare_toplevel_type(BarrierSet)                                       \
            declare_type(ModRefBarrierSet,             BarrierSet)         \
            declare_type(CardTableModRefBS,            ModRefBarrierSet)   \
@@ -2312,6 +2336,36 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
   declare_constant(JVM_ACC_PROMOTED_FLAGS)                                \
   declare_constant(JVM_ACC_FIELD_ACCESS_WATCHED)                          \
   declare_constant(JVM_ACC_FIELD_MODIFICATION_WATCHED)                    \
+  declare_constant(JVM_ACC_FIELD_INTERNAL)                                \
+  declare_constant(JVM_ACC_FIELD_STABLE)                                  \
+  declare_constant(JVM_ACC_FIELD_HAS_GENERIC_SIGNATURE)                   \
+                                                                          \
+  declare_constant(JVM_CONSTANT_Utf8)                                     \
+  declare_constant(JVM_CONSTANT_Unicode)                                  \
+  declare_constant(JVM_CONSTANT_Integer)                                  \
+  declare_constant(JVM_CONSTANT_Float)                                    \
+  declare_constant(JVM_CONSTANT_Long)                                     \
+  declare_constant(JVM_CONSTANT_Double)                                   \
+  declare_constant(JVM_CONSTANT_Class)                                    \
+  declare_constant(JVM_CONSTANT_String)                                   \
+  declare_constant(JVM_CONSTANT_Fieldref)                                 \
+  declare_constant(JVM_CONSTANT_Methodref)                                \
+  declare_constant(JVM_CONSTANT_InterfaceMethodref)                       \
+  declare_constant(JVM_CONSTANT_NameAndType)                              \
+  declare_constant(JVM_CONSTANT_MethodHandle)                             \
+  declare_constant(JVM_CONSTANT_MethodType)                               \
+  declare_constant(JVM_CONSTANT_InvokeDynamic)                            \
+  declare_constant(JVM_CONSTANT_ExternalMax)                              \
+                                                                          \
+  declare_constant(JVM_CONSTANT_Invalid)                                  \
+  declare_constant(JVM_CONSTANT_InternalMin)                              \
+  declare_constant(JVM_CONSTANT_UnresolvedClass)                          \
+  declare_constant(JVM_CONSTANT_ClassIndex)                               \
+  declare_constant(JVM_CONSTANT_StringIndex)                              \
+  declare_constant(JVM_CONSTANT_UnresolvedClassInError)                   \
+  declare_constant(JVM_CONSTANT_MethodHandleInError)                      \
+  declare_constant(JVM_CONSTANT_MethodTypeInError)                        \
+  declare_constant(JVM_CONSTANT_InternalMax)                              \
                                                                           \
   /*****************************/                                         \
   /* Thread::SuspendFlags enum */                                         \
@@ -2342,6 +2396,7 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
   /******************************/                                        \
                                                                           \
   declare_constant(Klass::_primary_super_limit)                           \
+  declare_constant(Klass::_lh_neutral_value)                              \
   declare_constant(Klass::_lh_instance_slow_path_bit)                     \
   declare_constant(Klass::_lh_log2_element_size_shift)                    \
   declare_constant(Klass::_lh_log2_element_size_mask)                     \
@@ -2532,6 +2587,13 @@ typedef BinaryTreeDictionary<Metablock, FreeList> MetablockTreeDictionary;
   declare_constant(Deoptimization::Unpack_exception)                      \
   declare_constant(Deoptimization::Unpack_uncommon_trap)                  \
   declare_constant(Deoptimization::Unpack_reexecute)                      \
+                                                                          \
+  declare_constant(Deoptimization::_action_bits)                          \
+  declare_constant(Deoptimization::_reason_bits)                          \
+  declare_constant(Deoptimization::_debug_id_bits)                        \
+  declare_constant(Deoptimization::_action_shift)                         \
+  declare_constant(Deoptimization::_reason_shift)                         \
+  declare_constant(Deoptimization::_debug_id_shift)                       \
                                                                           \
   /*********************/                                                 \
   /* Matcher (C2 only) */                                                 \
@@ -3025,7 +3087,8 @@ VMIntConstantEntry VMStructs::localHotSpotVMIntConstants[] = {
                    GENERATE_C2_PREPROCESSOR_VM_INT_CONSTANT_ENTRY)
 
 #ifdef GRAAL
-  VM_INT_CONSTANTS_GRAAL(GENERATE_VM_INT_CONSTANT_ENTRY)
+  VM_INT_CONSTANTS_GRAAL(GENERATE_VM_INT_CONSTANT_ENTRY,
+                         GENERATE_PREPROCESSOR_VM_INT_CONSTANT_ENTRY)
 #endif
 
 #if INCLUDE_ALL_GCS

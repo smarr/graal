@@ -131,9 +131,6 @@ SystemProperty *Arguments::_java_library_path = NULL;
 SystemProperty *Arguments::_java_home = NULL;
 SystemProperty *Arguments::_java_class_path = NULL;
 SystemProperty *Arguments::_sun_boot_class_path = NULL;
-#ifdef GRAAL
-SystemProperty *Arguments::_graal_gpu_isalist = NULL;
-#endif
 
 char* Arguments::_meta_index_path = NULL;
 char* Arguments::_meta_index_dir = NULL;
@@ -197,9 +194,6 @@ void Arguments::init_system_properties() {
   _sun_boot_class_path = new SystemProperty("sun.boot.class.path", NULL,  true);
 
   _java_class_path = new SystemProperty("java.class.path", "",  true);
-#ifdef GRAAL
-  _graal_gpu_isalist = new SystemProperty("graal.gpu.isalist", NULL, true);
-#endif
 
   // Add to System Property list.
   PropertyList_add(&_system_properties, _java_ext_dirs);
@@ -209,9 +203,6 @@ void Arguments::init_system_properties() {
   PropertyList_add(&_system_properties, _java_home);
   PropertyList_add(&_system_properties, _java_class_path);
   PropertyList_add(&_system_properties, _sun_boot_class_path);
-#ifdef GRAAL
-  PropertyList_add(&_system_properties, _graal_gpu_isalist);
-#endif
 
   // Set OS specific system properties values
   os::init_system_properties_values();
@@ -2297,18 +2288,6 @@ bool Arguments::check_vm_args_consistency() {
   status = status && verify_percentage(MarkSweepDeadRatio, "MarkSweepDeadRatio");
 
   status = status && verify_min_value(MarkSweepAlwaysCompactCount, 1, "MarkSweepAlwaysCompactCount");
-#ifdef SPARC
-  if (UseConcMarkSweepGC || UseG1GC) {
-    // Issue a stern warning if the user has explicitly set
-    // UseMemSetInBOT (it is known to cause issues), but allow
-    // use for experimentation and debugging.
-    if (VM_Version::is_sun4v() && UseMemSetInBOT) {
-      assert(!FLAG_IS_DEFAULT(UseMemSetInBOT), "Error");
-      warning("Experimental flag -XX:+UseMemSetInBOT is known to cause instability"
-          " on sun4v; please understand that you are using at your own risk!");
-    }
-  }
-#endif // SPARC
 
   if (PrintNMTStatistics) {
 #if INCLUDE_NMT
@@ -2335,6 +2314,10 @@ bool Arguments::check_vm_args_consistency() {
   if (!ScavengeRootsInCode) {
       warning("forcing ScavengeRootsInCode non-zero because Graal is enabled");
       ScavengeRootsInCode = 1;
+  }
+  if (TypeProfileLevel != 0) {
+      warning("forcing TypeProfileLevel to 0 as HotSpotMethodData can not yet handle the new type profile info");
+      TypeProfileLevel = 0;
   }
 #endif
 
@@ -3851,24 +3834,6 @@ jint Arguments::apply_ergo() {
       FLAG_SET_DEFAULT(PauseAtExit, true);
     }
   }
-
-#ifdef GRAAL
-  if (_graal_gpu_isalist->value() == NULL) {
-    // Initialize the graal.gpu.isalist system property if
-    // a) it was not explicitly defined by the user and
-    // b) at least one GPU is available.
-    // GPU offload can be disabled by setting the property
-    // to the empty string on the command line
-    if (gpu::is_available() && gpu::has_gpu_linkage()) {
-      if (gpu::get_target_il_type() == gpu::PTX) {
-        _graal_gpu_isalist->append_value("PTX");
-      }
-      if (gpu::get_target_il_type() == gpu::HSAIL) {
-        _graal_gpu_isalist->append_value("HSAIL");
-      }
-    }
-  }
-#endif
 
   return JNI_OK;
 }

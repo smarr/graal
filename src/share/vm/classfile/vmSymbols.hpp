@@ -273,7 +273,6 @@
   template(java_lang_invoke_Stable_signature,         "Ljava/lang/invoke/Stable;")                \
   template(java_lang_invoke_LambdaForm_Compiled_signature, "Ljava/lang/invoke/LambdaForm$Compiled;") \
   template(java_lang_invoke_LambdaForm_Hidden_signature, "Ljava/lang/invoke/LambdaForm$Hidden;")  \
-  template(java_lang_invoke_MagicLambdaImpl,          "java/lang/invoke/MagicLambdaImpl")         \
   /* internal up-calls made only by the JVM, via class sun.invoke.MethodHandleNatives: */         \
   template(findMethodHandleType_name,                 "findMethodHandleType")                     \
   template(findMethodHandleType_signature,       "(Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;") \
@@ -297,6 +296,8 @@
   template(com_oracle_graal_hotspot_HotSpotKlassOop,                 "com/oracle/graal/hotspot/HotSpotKlassOop")                      \
   template(com_oracle_graal_hotspot_HotSpotOptions,                  "com/oracle/graal/hotspot/HotSpotOptions")                       \
   template(com_oracle_graal_hotspot_HotSpotCompiledCode,             "com/oracle/graal/hotspot/HotSpotCompiledCode")                  \
+  template(com_oracle_graal_hotspot_HotSpotCompiledCode_HotSpotData, "com/oracle/graal/hotspot/HotSpotCompiledCode$HotSpotData")      \
+  template(com_oracle_graal_hotspot_HotSpotCompiledCode_DataSection, "com/oracle/graal/hotspot/HotSpotCompiledCode$DataSection")      \
   template(com_oracle_graal_hotspot_HotSpotCompiledCode_Comment,     "com/oracle/graal/hotspot/HotSpotCompiledCode$Comment")          \
   template(com_oracle_graal_hotspot_HotSpotCompiledNmethod,          "com/oracle/graal/hotspot/HotSpotCompiledNmethod")               \
   template(com_oracle_graal_hotspot_HotSpotCompiledRuntimeStub,      "com/oracle/graal/hotspot/HotSpotCompiledRuntimeStub")           \
@@ -307,12 +308,9 @@
   template(com_oracle_graal_hotspot_meta_HotSpotInstalledCode,       "com/oracle/graal/hotspot/meta/HotSpotInstalledCode")            \
   template(com_oracle_graal_hotspot_meta_HotSpotNmethod,             "com/oracle/graal/hotspot/meta/HotSpotNmethod")                  \
   template(com_oracle_graal_hotspot_meta_HotSpotJavaType,            "com/oracle/graal/hotspot/meta/HotSpotJavaType")                 \
-  template(com_oracle_graal_hotspot_meta_HotSpotMethodData,          "com/oracle/graal/hotspot/meta/HotSpotMethodData")               \
-  template(com_oracle_graal_hotspot_meta_HotSpotResolvedJavaField,   "com/oracle/graal/hotspot/meta/HotSpotResolvedJavaField")        \
   template(com_oracle_graal_hotspot_meta_HotSpotResolvedJavaMethod,  "com/oracle/graal/hotspot/meta/HotSpotResolvedJavaMethod")       \
   template(com_oracle_graal_hotspot_meta_HotSpotResolvedObjectType,  "com/oracle/graal/hotspot/meta/HotSpotResolvedObjectType")       \
   template(com_oracle_graal_hotspot_meta_HotSpotMonitorValue,        "com/oracle/graal/hotspot/meta/HotSpotMonitorValue")             \
-  template(com_oracle_graal_hotspot_debug_LocalImpl,                 "com/oracle/graal/hotspot/debug/LocalImpl")                      \
   template(com_oracle_graal_hotspot_CompilerThread,                  "com/oracle/graal/hotspot/CompilerThread")                       \
   /* graal.api.meta */                                                                                                                \
   template(com_oracle_graal_api_meta_Constant,                       "com/oracle/graal/api/meta/Constant")                            \
@@ -342,12 +340,14 @@
   template(com_oracle_graal_api_code_BytecodeFrame,                  "com/oracle/graal/api/code/BytecodeFrame")                       \
   template(com_oracle_graal_api_code_BytecodePosition,               "com/oracle/graal/api/code/BytecodePosition")                    \
   template(com_oracle_graal_api_code_DebugInfo,                      "com/oracle/graal/api/code/DebugInfo")                           \
+  template(com_oracle_graal_api_code_ReferenceMap,                   "com/oracle/graal/api/code/ReferenceMap")                        \
   template(com_oracle_graal_api_code_Register,                       "com/oracle/graal/api/code/Register")                            \
   template(com_oracle_graal_api_code_RegisterValue,                  "com/oracle/graal/api/code/RegisterValue")                       \
   template(com_oracle_graal_api_code_StackSlot,                      "com/oracle/graal/api/code/StackSlot")                           \
   template(com_oracle_graal_api_code_VirtualObject,                  "com/oracle/graal/api/code/VirtualObject")                       \
   template(com_oracle_graal_api_code_RegisterSaveLayout,             "com/oracle/graal/api/code/RegisterSaveLayout")                  \
   template(com_oracle_graal_api_code_InvalidInstalledCodeException,  "com/oracle/graal/api/code/InvalidInstalledCodeException")       \
+  template(com_oracle_graal_api_code_SpeculationLog,                 "com/oracle/graal/api/code/SpeculationLog")                      \
   /* graal.truffle */                                                                                                                 \
   template(com_oracle_graal_truffle_GraalTruffleRuntime,             "com/oracle/graal/truffle/GraalTruffleRuntime")                  \
   template(startCompiler_name,                    "startCompiler")                                                                    \
@@ -355,7 +355,7 @@
   template(compileTheWorld_name,                  "compileTheWorld")                                                                  \
   template(shutdownCompiler_name,                 "shutdownCompiler")                                                                 \
   template(compileMethod_name,                    "compileMethod")                                                                    \
-  template(compileMethod_signature,               "(JLcom/oracle/graal/hotspot/meta/HotSpotResolvedObjectType;IZ)V")                  \
+  template(compileMethod_signature,               "(JIZ)V")                                                                           \
   template(setOption_name,                        "setOption")                                                                        \
   template(setOption_signature,                   "(Ljava/lang/String;)Z")                                                            \
   template(finalizeOptions_name,                  "finalizeOptions")                                                                  \
@@ -370,19 +370,9 @@
   template(createUnresolvedJavaType_name,         "createUnresolvedJavaType")                                                         \
   template(createUnresolvedJavaType_signature,    "(Ljava/lang/String;)Lcom/oracle/graal/api/meta/JavaType;")                         \
   template(createResolvedJavaType_name,           "createResolvedJavaType")                                                           \
-  template(createResolvedJavaType_signature,      "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/Class;I)Lcom/oracle/graal/api/meta/ResolvedJavaType;") \
+  template(createResolvedJavaType_signature,      "(Ljava/lang/Class;)Lcom/oracle/graal/api/meta/ResolvedJavaType;") \
   template(createPrimitiveJavaType_name,          "createPrimitiveJavaType")                                                          \
   template(createPrimitiveJavaType_signature,     "(I)Lcom/oracle/graal/api/meta/JavaType;")                                          \
-  template(createLocalImpl_name,                  "createLocalImpl")                                                                  \
-  template(createLocalImpl_signature,             "(Ljava/lang/String;Ljava/lang/String;Lcom/oracle/graal/hotspot/meta/HotSpotResolvedObjectType;III)Lcom/oracle/graal/hotspot/debug/LocalImpl;") \
-  template(createConstant_name,                   "createConstant")                                                                   \
-  template(createConstant_signature,              "(Lcom/oracle/graal/api/meta/Kind;J)Lcom/oracle/graal/api/meta/Constant;")          \
-  template(createConstantFloat_name,              "createConstantFloat")                                                              \
-  template(createConstantFloat_signature,         "(F)Lcom/oracle/graal/api/meta/Constant;")                                          \
-  template(createConstantDouble_name,             "createConstantDouble")                                                             \
-  template(createConstantDouble_signature,        "(D)Lcom/oracle/graal/api/meta/Constant;")                                          \
-  template(createConstantObject_name,             "createConstantObject")                                                             \
-  template(createConstantObject_signature,        "(Ljava/lang/Object;)Lcom/oracle/graal/api/meta/Constant;")                         \
   template(getVMToCompiler_name,                  "getVMToCompiler")                                                                  \
   template(getVMToCompiler_signature,             "()Lcom/oracle/graal/hotspot/bridge/VMToCompiler;")                                 \
   template(runtime_name,                          "runtime")                                                                          \
@@ -436,6 +426,7 @@
   template(findNative_name,                           "findNative")                               \
   template(deadChild_name,                            "deadChild")                                \
   template(addClass_name,                             "addClass")                                 \
+  template(throwIllegalAccessError_name,              "throwIllegalAccessError")                  \
   template(getFromClass_name,                         "getFromClass")                             \
   template(dispatch_name,                             "dispatch")                                 \
   template(getSystemClassLoader_name,                 "getSystemClassLoader")                     \

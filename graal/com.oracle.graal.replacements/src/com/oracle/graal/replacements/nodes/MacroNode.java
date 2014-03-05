@@ -24,19 +24,19 @@ package com.oracle.graal.replacements.nodes;
 
 import static java.lang.reflect.Modifier.*;
 
-import java.lang.reflect.*;
-
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.debug.Debug.Scope;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.StructuredGraph.GuardsStage;
 import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
+import com.oracle.graal.replacements.*;
 
 public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, MemoryCheckpoint.Single {
 
@@ -45,6 +45,7 @@ public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, Me
     private final int bci;
     private final ResolvedJavaMethod targetMethod;
     private final JavaType returnType;
+    private final InvokeKind invokeKind;
 
     protected MacroNode(Invoke invoke) {
         super(invoke.asNode().stamp(), invoke.stateAfter());
@@ -53,6 +54,7 @@ public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, Me
         this.bci = invoke.bci();
         this.targetMethod = methodCallTarget.targetMethod();
         this.returnType = methodCallTarget.returnType();
+        this.invokeKind = methodCallTarget.invokeKind();
     }
 
     public int getBci() {
@@ -85,7 +87,15 @@ public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, Me
     protected StructuredGraph getLoweredSubstitutionGraph(LoweringTool tool) {
         StructuredGraph methodSubstitution = tool.getReplacements().getMethodSubstitution(getTargetMethod());
         if (methodSubstitution != null) {
-            return lowerReplacement(methodSubstitution.copy(), tool);
+            methodSubstitution = methodSubstitution.copy();
+            if (stateAfter() == null || stateAfter().bci == FrameState.AFTER_BCI) {
+                /*
+                 * handles the case of a MacroNode inside a snippet used for another MacroNode
+                 * lowering
+                 */
+                new CollapseFrameForSingleSideEffectPhase().apply(methodSubstitution);
+            }
+            return lowerReplacement(methodSubstitution, tool);
         }
         return null;
     }
@@ -96,10 +106,16 @@ public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, Me
      * @param replacementGraph a replacement (i.e., snippet or method substitution) graph
      */
     protected StructuredGraph lowerReplacement(final StructuredGraph replacementGraph, LoweringTool tool) {
-        replacementGraph.setGuardsStage(graph().getGuardsStage());
         final PhaseContext c = new PhaseContext(tool.getMetaAccess(), tool.getConstantReflection(), tool.getLowerer(), tool.getReplacements(), tool.assumptions());
-        try (Scope s = Debug.scope("LoweringReplacement", replacementGraph)) {
-            new LoweringPhase(new CanonicalizerPhase(true)).apply(replacementGraph, c);
+        GuardsStage guardsStage = graph().getGuardsStage();
+        if (guardsStage.ordinal() >= GuardsStage.FIXED_DEOPTS.ordinal()) {
+            new GuardLoweringPhase().apply(replacementGraph, null);
+            if (guardsStage.ordinal() >= GuardsStage.AFTER_FSA.ordinal()) {
+                new FrameStateAssignmentPhase().apply(replacementGraph);
+            }
+        }
+        try (Scope s = Debug.scope("LoweringSnippetTemplate", replacementGraph)) {
+            new LoweringPhase(new CanonicalizerPhase(true), tool.getLoweringStage()).apply(replacementGraph, c);
         } catch (Throwable e) {
             throw Debug.handle(e);
         }
@@ -132,17 +148,21 @@ public class MacroNode extends AbstractMemoryCheckpoint implements Lowerable, Me
         }
     }
 
-    private InvokeNode replaceWithInvoke() {
+    protected InvokeNode replaceWithInvoke() {
         InvokeNode invoke = createInvoke();
         graph().replaceFixedWithFixed(this, invoke);
         return invoke;
     }
 
     protected InvokeNode createInvoke() {
-        InvokeKind invokeKind = Modifier.isStatic(targetMethod.getModifiers()) ? InvokeKind.Static : InvokeKind.Special;
         MethodCallTargetNode callTarget = graph().add(new MethodCallTargetNode(invokeKind, targetMethod, arguments.toArray(new ValueNode[arguments.size()]), returnType));
         InvokeNode invoke = graph().add(new InvokeNode(callTarget, bci));
-        invoke.setStateAfter(stateAfter());
+        if (stateAfter() != null) {
+            invoke.setStateAfter(stateAfter().duplicate());
+            if (kind() != Kind.Void) {
+                invoke.stateAfter().replaceFirstInput(this, invoke);
+            }
+        }
         return invoke;
     }
 

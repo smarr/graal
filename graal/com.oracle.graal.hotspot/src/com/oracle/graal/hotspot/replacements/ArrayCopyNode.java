@@ -23,6 +23,7 @@
 package com.oracle.graal.hotspot.replacements;
 
 import static com.oracle.graal.compiler.GraalCompiler.*;
+import static com.oracle.graal.hotspot.replacements.HotSpotReplacementsUtil.*;
 
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.debug.*;
@@ -63,6 +64,10 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
         return arguments.get(4);
     }
 
+    static boolean isHeapWordAligned(Constant value, Kind kind) {
+        return (arrayBaseOffset(kind) + (long) value.asInt() * arrayIndexScale(kind)) % heapWordSize() == 0;
+    }
+
     private StructuredGraph selectSnippet(LoweringTool tool, final Replacements replacements) {
         ResolvedJavaType srcType = ObjectStamp.typeOrNull(getSource().stamp());
         ResolvedJavaType destType = ObjectStamp.typeOrNull(getDestination().stamp());
@@ -70,11 +75,14 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
         if (srcType == null || !srcType.isArray() || destType == null || !destType.isArray()) {
             return null;
         }
-        if (!destType.getComponentType().isAssignableFrom(srcType.getComponentType()) || !ObjectStamp.isExactType(getDestination().stamp())) {
+        if (!destType.getComponentType().isAssignableFrom(srcType.getComponentType())) {
+            return null;
+        }
+        if (!isExact()) {
             return null;
         }
         Kind componentKind = srcType.getComponentType().getKind();
-        final ResolvedJavaMethod snippetMethod = tool.getMetaAccess().lookupJavaMethod(ArrayCopySnippets.getSnippetForKind(componentKind));
+        final ResolvedJavaMethod snippetMethod = tool.getMetaAccess().lookupJavaMethod(ArrayCopySnippets.getSnippetForKind(componentKind, shouldUnroll(), isExact()));
         try (Scope s = Debug.scope("ArrayCopySnippet", snippetMethod)) {
             return replacements.getSnippet(snippetMethod);
         } catch (Throwable e) {
@@ -83,9 +91,9 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
     }
 
     private static void unrollFixedLengthLoop(StructuredGraph snippetGraph, int length, LoweringTool tool) {
-        LocalNode lengthLocal = snippetGraph.getLocal(4);
-        if (lengthLocal != null) {
-            snippetGraph.replaceFloating(lengthLocal, ConstantNode.forInt(length, snippetGraph));
+        ParameterNode lengthParam = snippetGraph.getParameter(4);
+        if (lengthParam != null) {
+            snippetGraph.replaceFloating(lengthParam, ConstantNode.forInt(length, snippetGraph));
         }
         // the canonicalization before loop unrolling is needed to propagate the length into
         // additions, etc.
@@ -107,7 +115,7 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
             final ResolvedJavaMethod snippetMethod = tool.getMetaAccess().lookupJavaMethod(ArrayCopySnippets.genericArraycopySnippet);
             snippetGraph = null;
             try (Scope s = Debug.scope("ArrayCopySnippet", snippetMethod)) {
-                snippetGraph = replacements.getSnippet(snippetMethod).copy();
+                snippetGraph = replacements.getSnippet(snippetMethod, getTargetMethod()).copy();
             } catch (Throwable e) {
                 throw Debug.handle(e);
             }
@@ -115,7 +123,7 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
         } else {
             assert snippetGraph != null : "ArrayCopySnippets should be installed";
             snippetGraph = snippetGraph.copy();
-            if (getLength().isConstant() && getLength().asConstant().asInt() <= GraalOptions.MaximumEscapeAnalysisArrayLength.getValue()) {
+            if (shouldUnroll()) {
                 final StructuredGraph copy = snippetGraph;
                 try (Scope s = Debug.scope("ArrayCopySnippetSpecialization", snippetGraph.method())) {
                     unrollFixedLengthLoop(copy, getLength().asConstant().asInt(), tool);
@@ -125,6 +133,28 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
             }
         }
         return lowerReplacement(snippetGraph, tool);
+    }
+
+    private boolean shouldUnroll() {
+        return getLength().isConstant() && getLength().asConstant().asInt() <= GraalOptions.MaximumEscapeAnalysisArrayLength.getValue();
+    }
+
+    /*
+     * Returns true if this copy doesn't require store checks. Trivially true for primitive arrays.
+     */
+    private boolean isExact() {
+        ResolvedJavaType srcType = ObjectStamp.typeOrNull(getSource().stamp());
+        if (srcType.getComponentType().getKind().isPrimitive() || getSource() == getDestination()) {
+            return true;
+        }
+
+        ResolvedJavaType destType = ObjectStamp.typeOrNull(getDestination().stamp());
+        if (ObjectStamp.isExactType(getDestination().stamp())) {
+            if (destType != null && destType.isAssignableFrom(srcType)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean checkBounds(int position, int length, VirtualObjectNode virtualObject) {
@@ -188,4 +218,5 @@ public class ArrayCopyNode extends MacroNode implements Virtualizable, Lowerable
             }
         }
     }
+
 }

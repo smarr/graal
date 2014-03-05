@@ -50,6 +50,7 @@ private:
 
   Arena         _arena;
 
+  oop           _dataSection;
   arrayOop      _sites;
   arrayOop      _exception_handlers;
   CodeOffsets   _offsets;
@@ -84,9 +85,15 @@ private:
 
 public:
 
-  CodeInstaller(Handle& comp_result, GraalEnv::CodeInstallResult& result, CodeBlob*& cb, Handle installed_code, Handle triggered_deoptimizations);
+  CodeInstaller() {};
+  GraalEnv::CodeInstallResult install(Handle& compiled_code, CodeBlob*& cb, Handle installed_code, Handle speculation_log);
 
   static address runtime_call_target_address(oop runtime_call);
+
+protected:
+
+  virtual ScopeValue* get_scope_value(oop value, int total_frame_size, GrowableArray<ScopeValue*>* objects, ScopeValue* &second, OopRecorder* oop_recorder);
+  virtual MonitorValue* get_monitor_value(oop value, int total_frame_size, GrowableArray<ScopeValue*>* objects, OopRecorder* oop_recorder);
 
 private:
   // extract the fields of the CompilationResult
@@ -95,8 +102,6 @@ private:
 
   // perform data and call relocation on the CodeBuffer
   bool initialize_buffer(CodeBuffer& buffer);
-
-  int calculate_constants_size();
 
   void assumption_MethodContents(Handle assumption);
   void assumption_NoFinalizableSubclass(Handle assumption);

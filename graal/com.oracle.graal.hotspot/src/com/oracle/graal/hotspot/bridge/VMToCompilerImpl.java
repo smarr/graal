@@ -20,36 +20,31 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.graal.hotspot.bridge;
 
 import static com.oracle.graal.compiler.GraalDebugConfig.*;
-import static com.oracle.graal.graph.UnsafeAccess.*;
-import static com.oracle.graal.hotspot.HotSpotGraalRuntime.*;
+import static com.oracle.graal.hotspot.CompileTheWorld.Options.*;
 
 import java.io.*;
 import java.lang.reflect.*;
 import java.security.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
 
-import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.compiler.*;
+import com.oracle.graal.compiler.CompilerThreadFactory.CompilerThread;
 import com.oracle.graal.compiler.CompilerThreadFactory.DebugConfigAccess;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.debug.internal.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.hotspot.*;
+import com.oracle.graal.hotspot.CompileTheWorld.Config;
 import com.oracle.graal.hotspot.debug.*;
 import com.oracle.graal.hotspot.meta.*;
-import com.oracle.graal.hotspot.phases.*;
 import com.oracle.graal.java.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.options.*;
-import com.oracle.graal.phases.*;
-import com.oracle.graal.phases.PhasePlan.PhasePosition;
 import com.oracle.graal.printer.*;
 import com.oracle.graal.replacements.*;
 
@@ -64,6 +59,14 @@ public class VMToCompilerImpl implements VMToCompiler {
 
     @Option(help = "Print compilation queue activity periodically")
     private static final OptionValue<Boolean> PrintQueue = new OptionValue<>(false);
+
+    @Option(help = "Interval in milliseconds at which to print compilation rate periodically. " +
+                   "The compilation statistics are reset after each print out so this option " +
+                   "is incompatible with -XX:+CITime and -XX:+CITimeEach.")
+    public static final OptionValue<Integer> PrintCompRate = new OptionValue<>(0);
+
+    @Option(help = "Print bootstrap progress and summary")
+    private static final OptionValue<Boolean> PrintBootstrap = new OptionValue<>(true);
 
     @Option(help = "Time limit in milliseconds for bootstrap (-1 for no limit)")
     private static final OptionValue<Integer> TimedBootstrap = new OptionValue<>(-1);
@@ -81,18 +84,7 @@ public class VMToCompilerImpl implements VMToCompiler {
 
     private final HotSpotGraalRuntime runtime;
 
-    public final HotSpotResolvedPrimitiveType typeBoolean;
-    public final HotSpotResolvedPrimitiveType typeChar;
-    public final HotSpotResolvedPrimitiveType typeFloat;
-    public final HotSpotResolvedPrimitiveType typeDouble;
-    public final HotSpotResolvedPrimitiveType typeByte;
-    public final HotSpotResolvedPrimitiveType typeShort;
-    public final HotSpotResolvedPrimitiveType typeInt;
-    public final HotSpotResolvedPrimitiveType typeLong;
-    public final HotSpotResolvedPrimitiveType typeVoid;
-
     private ThreadPoolExecutor compileQueue;
-    private AtomicInteger compileTaskIds = new AtomicInteger();
 
     private volatile boolean bootstrapRunning;
 
@@ -102,22 +94,6 @@ public class VMToCompilerImpl implements VMToCompiler {
 
     public VMToCompilerImpl(HotSpotGraalRuntime runtime) {
         this.runtime = runtime;
-
-        typeBoolean = new HotSpotResolvedPrimitiveType(Kind.Boolean);
-        typeChar = new HotSpotResolvedPrimitiveType(Kind.Char);
-        typeFloat = new HotSpotResolvedPrimitiveType(Kind.Float);
-        typeDouble = new HotSpotResolvedPrimitiveType(Kind.Double);
-        typeByte = new HotSpotResolvedPrimitiveType(Kind.Byte);
-        typeShort = new HotSpotResolvedPrimitiveType(Kind.Short);
-        typeInt = new HotSpotResolvedPrimitiveType(Kind.Int);
-        typeLong = new HotSpotResolvedPrimitiveType(Kind.Long);
-        typeVoid = new HotSpotResolvedPrimitiveType(Kind.Void);
-    }
-
-    private static void initMirror(HotSpotResolvedPrimitiveType type, long offset) {
-        Class<?> mirror = type.mirror();
-        unsafe.putObject(mirror, offset, type);
-        assert unsafe.getObject(mirror, offset) == type;
     }
 
     public void startCompiler(boolean bootstrapEnabled) throws Throwable {
@@ -125,18 +101,6 @@ public class VMToCompilerImpl implements VMToCompiler {
         FastNodeClassRegistry.initialize();
 
         bootstrapRunning = bootstrapEnabled;
-
-        final HotSpotVMConfig config = runtime.getConfig();
-        long offset = config.graalMirrorInClassOffset;
-        initMirror(typeBoolean, offset);
-        initMirror(typeChar, offset);
-        initMirror(typeFloat, offset);
-        initMirror(typeDouble, offset);
-        initMirror(typeByte, offset);
-        initMirror(typeShort, offset);
-        initMirror(typeInt, offset);
-        initMirror(typeLong, offset);
-        initMirror(typeVoid, offset);
 
         if (LogFile.getValue() != null) {
             try {
@@ -146,8 +110,6 @@ public class VMToCompilerImpl implements VMToCompiler {
                 throw new RuntimeException("couldn't open log file: " + LogFile.getValue(), e);
             }
         }
-
-        runtime.getCompilerToVM();
 
         TTY.initialize(log);
 
@@ -176,7 +138,7 @@ public class VMToCompilerImpl implements VMToCompiler {
 
         HotSpotBackend hostBackend = runtime.getHostBackend();
         final HotSpotProviders hostProviders = hostBackend.getProviders();
-        assert VerifyOptionsPhase.checkOptions(hostProviders.getMetaAccess(), hostProviders.getForeignCalls());
+        assert VerifyOptionsPhase.checkOptions(hostProviders.getMetaAccess());
 
         // Complete initialization of backends
         hostBackend.completeInitialization();
@@ -192,7 +154,7 @@ public class VMToCompilerImpl implements VMToCompiler {
                 return Debug.isEnabled() ? DebugEnvironment.initialize(log) : null;
             }
         });
-        compileQueue = new ThreadPoolExecutor(Threads.getValue(), Threads.getValue(), 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), factory);
+        compileQueue = new ThreadPoolExecutor(Threads.getValue(), Threads.getValue(), 0L, TimeUnit.MILLISECONDS, new PriorityBlockingQueue<Runnable>(), factory);
 
         // Create queue status printing thread.
         if (PrintQueue.getValue()) {
@@ -213,34 +175,31 @@ public class VMToCompilerImpl implements VMToCompiler {
             t.start();
         }
 
+        if (PrintCompRate.getValue() != 0) {
+            if (runtime.getConfig().ciTime || runtime.getConfig().ciTimeEach) {
+                throw new GraalInternalError("PrintCompRate is incompatible with CITime and CITimeEach");
+            }
+            Thread t = new Thread() {
+
+                @Override
+                public void run() {
+                    while (true) {
+                        runtime.getCompilerToVM().printCompilationStatistics(true, false);
+                        runtime.getCompilerToVM().resetCompilationStatistics();
+                        try {
+                            Thread.sleep(PrintCompRate.getValue());
+                        } catch (InterruptedException e) {
+                        }
+                    }
+                }
+            };
+            t.setDaemon(true);
+            t.start();
+        }
+
         BenchmarkCounters.initialize(runtime.getCompilerToVM());
 
         compilerStartTime = System.nanoTime();
-    }
-
-    /**
-     * A fast-path for {@link NodeClass} retrieval using {@link HotSpotResolvedObjectType}.
-     */
-    static class FastNodeClassRegistry extends NodeClass.Registry {
-
-        @SuppressWarnings("unused")
-        static void initialize() {
-            new FastNodeClassRegistry();
-        }
-
-        private static HotSpotResolvedObjectType type(Class<? extends Node> key) {
-            return (HotSpotResolvedObjectType) HotSpotResolvedObjectType.fromClass(key);
-        }
-
-        @Override
-        public NodeClass get(Class<? extends Node> key) {
-            return type(key).getNodeClass();
-        }
-
-        @Override
-        protected void registered(Class<? extends Node> key, NodeClass value) {
-            type(key).setNodeClass(value);
-        }
     }
 
     /**
@@ -264,8 +223,11 @@ public class VMToCompilerImpl implements VMToCompiler {
     }
 
     public void bootstrap() throws Throwable {
-        TTY.print("Bootstrapping Graal");
-        TTY.flush();
+        if (PrintBootstrap.getValue()) {
+            TTY.print("Bootstrapping Graal");
+            TTY.flush();
+        }
+
         long startTime = System.currentTimeMillis();
 
         boolean firstRun = true;
@@ -286,21 +248,19 @@ public class VMToCompilerImpl implements VMToCompiler {
             // Compile until the queue is empty.
             int z = 0;
             while (true) {
-                try {
-                    assert !CompilationTask.withinEnqueue.get();
-                    CompilationTask.withinEnqueue.set(Boolean.TRUE);
+                try (CompilationTask.BeginEnqueue beginEnqueue = new CompilationTask.BeginEnqueue()) {
                     if (compileQueue.getCompletedTaskCount() >= Math.max(3, compileQueue.getTaskCount())) {
                         break;
                     }
-                } finally {
-                    CompilationTask.withinEnqueue.set(Boolean.FALSE);
                 }
 
                 Thread.sleep(100);
                 while (z < compileQueue.getCompletedTaskCount() / 100) {
                     ++z;
-                    TTY.print(".");
-                    TTY.flush();
+                    if (PrintBootstrap.getValue()) {
+                        TTY.print(".");
+                        TTY.flush();
+                    }
                 }
 
                 // Are we out of time?
@@ -321,7 +281,10 @@ public class VMToCompilerImpl implements VMToCompiler {
 
         bootstrapRunning = false;
 
-        TTY.println(" in %d ms (compiled %d methods)", System.currentTimeMillis() - startTime, compileQueue.getCompletedTaskCount());
+        if (PrintBootstrap.getValue()) {
+            TTY.println(" in %d ms (compiled %d methods)", System.currentTimeMillis() - startTime, compileQueue.getCompletedTaskCount());
+        }
+
         if (runtime.getGraphCache() != null) {
             runtime.getGraphCache().clear();
         }
@@ -330,7 +293,14 @@ public class VMToCompilerImpl implements VMToCompiler {
     }
 
     public void compileTheWorld() throws Throwable {
-        new CompileTheWorld().compile();
+        int iterations = CompileTheWorld.Options.CompileTheWorldIterations.getValue();
+        for (int i = 0; i < iterations; i++) {
+            runtime.getCompilerToVM().resetCompilationStatistics();
+            TTY.println("CompileTheWorld : iteration " + i);
+            CompileTheWorld ctw = new CompileTheWorld(CompileTheWorldClasspath.getValue(), new Config(CompileTheWorldConfig.getValue()), CompileTheWorldStartAt.getValue(),
+                            CompileTheWorldStopAt.getValue(), CompileTheWorldVerbose.getValue());
+            ctw.compile();
+        }
         System.exit(0);
     }
 
@@ -351,9 +321,7 @@ public class VMToCompilerImpl implements VMToCompiler {
     }
 
     public void shutdownCompiler() throws Exception {
-        try {
-            assert !CompilationTask.withinEnqueue.get();
-            CompilationTask.withinEnqueue.set(Boolean.TRUE);
+        try (CompilationTask.BeginEnqueue beginEnqueue = new CompilationTask.BeginEnqueue()) {
             // We have to use a privileged action here because shutting down the compiler might be
             // called from user code which very likely contains unprivileged frames.
             AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
@@ -362,8 +330,6 @@ public class VMToCompilerImpl implements VMToCompiler {
                     return null;
                 }
             });
-        } finally {
-            CompilationTask.withinEnqueue.set(Boolean.FALSE);
         }
 
         printDebugValues(ResetDebugValuesAfterBootstrap.getValue() ? "application" : null, false);
@@ -540,8 +506,8 @@ public class VMToCompilerImpl implements VMToCompiler {
     }
 
     @Override
-    public void compileMethod(long metaspaceMethod, final HotSpotResolvedObjectType holder, final int entryBCI, final boolean blocking) {
-        final HotSpotResolvedJavaMethod method = holder.createMethod(metaspaceMethod);
+    public void compileMethod(long metaspaceMethod, final int entryBCI, final boolean blocking) {
+        final HotSpotResolvedJavaMethod method = HotSpotResolvedJavaMethod.fromMetaspace(metaspaceMethod);
         // We have to use a privileged action here because compilations are enqueued from user code
         // which very likely contains unprivileged frames.
         AccessController.doPrivileged(new PrivilegedAction<Void>() {
@@ -555,7 +521,7 @@ public class VMToCompilerImpl implements VMToCompiler {
     /**
      * Compiles a method to machine code.
      */
-    public void compileMethod(final HotSpotResolvedJavaMethod method, final int entryBCI, final boolean blocking) {
+    void compileMethod(final HotSpotResolvedJavaMethod method, final int entryBCI, final boolean blocking) {
         boolean osrCompilation = entryBCI != StructuredGraph.INVOCATION_ENTRY_BCI;
         if (osrCompilation && bootstrapRunning) {
             // no OSR compilations during bootstrap - the compiler is just too slow at this point,
@@ -563,7 +529,7 @@ public class VMToCompilerImpl implements VMToCompiler {
             return;
         }
 
-        if (CompilationTask.withinEnqueue.get()) {
+        if (CompilationTask.isWithinEnqueue()) {
             // This is required to avoid deadlocking a compiler thread. The issue is that a
             // java.util.concurrent.BlockingQueue is used to implement the compilation worker
             // queues. If a compiler thread triggers a compilation, then it may be blocked trying
@@ -571,29 +537,25 @@ public class VMToCompilerImpl implements VMToCompiler {
             return;
         }
 
-        CompilationTask.withinEnqueue.set(Boolean.TRUE);
-        try {
+        // Don't allow blocking compiles from CompilerThreads
+        boolean block = blocking && !(Thread.currentThread() instanceof CompilerThread);
+        try (CompilationTask.BeginEnqueue beginEnqueue = new CompilationTask.BeginEnqueue()) {
             if (method.tryToQueueForCompilation()) {
                 assert method.isQueuedForCompilation();
 
-                final OptimisticOptimizations optimisticOpts = new OptimisticOptimizations(method);
-                int id = compileTaskIds.incrementAndGet();
                 HotSpotBackend backend = runtime.getHostBackend();
-                CompilationTask task = CompilationTask.create(backend, createPhasePlan(backend.getProviders(), optimisticOpts, osrCompilation), optimisticOpts, method, entryBCI, id);
+                CompilationTask task = new CompilationTask(backend, method, entryBCI, block);
 
-                if (blocking) {
-                    task.runCompilation();
-                } else {
-                    try {
-                        method.setCurrentTask(task);
-                        compileQueue.execute(task);
-                    } catch (RejectedExecutionException e) {
-                        // The compile queue was already shut down.
+                try {
+                    method.setCurrentTask(task);
+                    compileQueue.execute(task);
+                    if (block) {
+                        task.block();
                     }
+                } catch (RejectedExecutionException e) {
+                    // The compile queue was already shut down.
                 }
             }
-        } finally {
-            CompilationTask.withinEnqueue.set(Boolean.FALSE);
         }
     }
 
@@ -606,7 +568,7 @@ public class VMToCompilerImpl implements VMToCompiler {
     public JavaField createJavaField(JavaType holder, String name, JavaType type, int offset, int flags, boolean internal) {
         if (offset != -1) {
             HotSpotResolvedObjectType resolved = (HotSpotResolvedObjectType) holder;
-            return resolved.createField(name, type, offset, flags, internal);
+            return resolved.createField(name, type, offset, flags);
         }
         return new HotSpotUnresolvedField(holder, name, type);
     }
@@ -619,28 +581,39 @@ public class VMToCompilerImpl implements VMToCompiler {
 
     @Override
     public ResolvedJavaType createPrimitiveJavaType(int basicType) {
+        Class<?> javaClass;
         switch (basicType) {
             case 4:
-                return typeBoolean;
+                javaClass = boolean.class;
+                break;
             case 5:
-                return typeChar;
+                javaClass = char.class;
+                break;
             case 6:
-                return typeFloat;
+                javaClass = float.class;
+                break;
             case 7:
-                return typeDouble;
+                javaClass = double.class;
+                break;
             case 8:
-                return typeByte;
+                javaClass = byte.class;
+                break;
             case 9:
-                return typeShort;
+                javaClass = short.class;
+                break;
             case 10:
-                return typeInt;
+                javaClass = int.class;
+                break;
             case 11:
-                return typeLong;
+                javaClass = long.class;
+                break;
             case 14:
-                return typeVoid;
+                javaClass = void.class;
+                break;
             default:
                 throw new IllegalArgumentException("Unknown basic type: " + basicType);
         }
+        return HotSpotResolvedPrimitiveType.fromClass(javaClass);
     }
 
     @Override
@@ -662,65 +635,8 @@ public class VMToCompilerImpl implements VMToCompiler {
     }
 
     @Override
-    public HotSpotResolvedObjectType createResolvedJavaType(long metaspaceKlass, String name, String simpleName, Class javaMirror, int sizeOrSpecies) {
-        HotSpotResolvedObjectType type = new HotSpotResolvedObjectType(metaspaceKlass, name, simpleName, javaMirror, sizeOrSpecies);
-
-        long offset = runtime().getConfig().graalMirrorInClassOffset;
-        if (!unsafe.compareAndSwapObject(javaMirror, offset, null, type)) {
-            // lost the race - return the existing value instead
-            type = (HotSpotResolvedObjectType) unsafe.getObject(javaMirror, offset);
-        }
-        return type;
-    }
-
-    @Override
-    public Constant createConstant(Kind kind, long value) {
-        if (kind == Kind.Long) {
-            return Constant.forLong(value);
-        } else if (kind == Kind.Int) {
-            return Constant.forInt((int) value);
-        } else if (kind == Kind.Short) {
-            return Constant.forShort((short) value);
-        } else if (kind == Kind.Char) {
-            return Constant.forChar((char) value);
-        } else if (kind == Kind.Byte) {
-            return Constant.forByte((byte) value);
-        } else if (kind == Kind.Boolean) {
-            return (value == 0) ? Constant.FALSE : Constant.TRUE;
-        } else {
-            throw new IllegalArgumentException();
-        }
-    }
-
-    @Override
-    public Constant createConstantFloat(float value) {
-        return Constant.forFloat(value);
-    }
-
-    @Override
-    public Constant createConstantDouble(double value) {
-        return Constant.forDouble(value);
-    }
-
-    @Override
-    public Constant createConstantObject(Object object) {
-        return Constant.forObject(object);
-    }
-
-    @Override
-    public LocalImpl createLocalImpl(String name, String type, HotSpotResolvedObjectType holder, int bciStart, int bciEnd, int slot) {
-        return new LocalImpl(name, type, holder, bciStart, bciEnd, slot);
-    }
-
-    public PhasePlan createPhasePlan(HotSpotProviders providers, OptimisticOptimizations optimisticOpts, boolean onStackReplacement) {
-        PhasePlan phasePlan = new PhasePlan();
-        MetaAccessProvider metaAccess = providers.getMetaAccess();
-        ForeignCallsProvider foreignCalls = providers.getForeignCalls();
-        phasePlan.addPhase(PhasePosition.AFTER_PARSING, new GraphBuilderPhase(metaAccess, foreignCalls, GraphBuilderConfiguration.getDefault(), optimisticOpts));
-        if (onStackReplacement) {
-            phasePlan.addPhase(PhasePosition.AFTER_PARSING, new OnStackReplacementPhase());
-        }
-        return phasePlan;
+    public ResolvedJavaType createResolvedJavaType(Class javaMirror) {
+        return HotSpotResolvedObjectType.fromClass(javaMirror);
     }
 
     @Override

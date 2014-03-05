@@ -29,14 +29,17 @@ import com.oracle.graal.api.meta.*;
 import com.oracle.graal.asm.hsail.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.lir.*;
-import com.oracle.graal.lir.asm.*;
+import com.oracle.graal.lir.asm.CompilationResultBuilder;
 
 /**
  * Defines arithmetic instruction nodes.
  */
 public enum HSAILArithmetic {
+    ABS,
     CALL,
+    CEIL,
     FDIV,
+    FLOOR,
     FREM,
     DADD,
     DDIV,
@@ -97,16 +100,17 @@ public enum HSAILArithmetic {
     LUSUB,
     LXOR,
     OADD,
+    RINT,
     SQRT,
     UNDEF;
 
     public static class ConvertOp extends HSAILLIRInstruction {
-        private final Kind from;
-        private final Kind to;
+        private final String from;
+        private final String to;
         @Def({REG}) protected AllocatableValue result;
         @Use({REG, STACK}) protected AllocatableValue x;
 
-        public ConvertOp(AllocatableValue result, AllocatableValue x, Kind to, Kind from) {
+        public ConvertOp(AllocatableValue result, AllocatableValue x, String to, String from) {
             this.from = from;
             this.to = to;
             this.result = result;
@@ -114,7 +118,7 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
             masm.emitConvert(result, x, to, from);
         }
     }
@@ -131,8 +135,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, x, null);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, x, null);
         }
     }
 
@@ -150,8 +154,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, x, y, null);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, x, y, null);
         }
 
         @Override
@@ -173,8 +177,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, x, null);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, x, null);
         }
     }
 
@@ -192,8 +196,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, x, y, null);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, x, y, null);
         }
 
         @Override
@@ -217,7 +221,7 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
             throw GraalInternalError.shouldNotReachHere();
         }
 
@@ -242,8 +246,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, x, y, null);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, x, y, null);
         }
 
         @Override
@@ -270,8 +274,8 @@ public enum HSAILArithmetic {
         }
 
         @Override
-        public void emitCode(TargetMethodAssembler tasm, HSAILAssembler masm) {
-            emit(tasm, masm, opcode, result, y, state);
+        public void emitCode(CompilationResultBuilder crb, HSAILAssembler masm) {
+            emit(crb, masm, opcode, result, y, state);
         }
 
         @Override
@@ -282,17 +286,40 @@ public enum HSAILArithmetic {
     }
 
     @SuppressWarnings("unused")
-    protected static void emit(TargetMethodAssembler tasm, HSAILAssembler masm, HSAILArithmetic opcode, Value result) {
+    protected static void emit(CompilationResultBuilder crb, HSAILAssembler masm, HSAILArithmetic opcode, Value result) {
         switch (opcode) {
             default:
                 throw GraalInternalError.shouldNotReachHere();
         }
     }
 
-    public static void emit(TargetMethodAssembler tasm, HSAILAssembler masm, HSAILArithmetic opcode, Value dst, Value src, LIRFrameState info) {
+    /**
+     * Emits the HSAIL code for an arithmetic operation taking one input parameter.
+     * 
+     * @param crb the CompilationResultBuilder
+     * @param masm the HSAIL assembler
+     * @param opcode the opcode of the arithmetic operation
+     * @param dst the destination
+     * @param src the source parameter
+     * @param info structure that stores the LIRFrameState. Used for exception handling.
+     */
+
+    public static void emit(CompilationResultBuilder crb, HSAILAssembler masm, HSAILArithmetic opcode, Value dst, Value src, LIRFrameState info) {
         int exceptionOffset = -1;
         if (isRegister(src)) {
             switch (opcode) {
+                case ABS:
+                    masm.emit("abs", dst, src);
+                    break;
+                case CEIL:
+                    masm.emit("ceil", dst, src);
+                    break;
+                case FLOOR:
+                    masm.emit("floor", dst, src);
+                    break;
+                case RINT:
+                    masm.emit("rint", dst, src);
+                    break;
                 case SQRT:
                     masm.emit("sqrt", dst, src);
                     break;
@@ -304,14 +331,12 @@ public enum HSAILArithmetic {
                     break;
                 case INOT:
                 case LNOT:
-                    // Emit the HSAIL instruction for a bitwise not.
                     masm.emitForceBitwise("not", dst, src);
                     break;
                 case INEG:
                 case LNEG:
                 case FNEG:
                 case DNEG:
-                    // Emit the HSAIL instruction for a negate operation.
                     masm.emit("neg", dst, src);
                     break;
                 default:
@@ -322,11 +347,11 @@ public enum HSAILArithmetic {
         }
         if (info != null) {
             assert exceptionOffset != -1;
-            tasm.recordImplicitException(exceptionOffset, info);
+            crb.recordImplicitException(exceptionOffset, info);
         }
     }
 
-    public static void emit(TargetMethodAssembler tasm, HSAILAssembler masm, HSAILArithmetic opcode, Value dst, Value src1, Value src2, LIRFrameState info) {
+    public static void emit(CompilationResultBuilder crb, HSAILAssembler masm, HSAILArithmetic opcode, Value dst, Value src1, Value src2, LIRFrameState info) {
         /**
          * First check if one of src1 or src2 is an AddressValue. If it is, convert the address to a
          * register using an lda instruction. We can just reuse the eventual dst register for this.
@@ -334,12 +359,12 @@ public enum HSAILArithmetic {
         if (src1 instanceof HSAILAddressValue) {
             assert (!(src2 instanceof HSAILAddressValue));
             masm.emitLda(dst, ((HSAILAddressValue) src1).toAddress());
-            emit(tasm, masm, opcode, dst, dst, src2, info);
+            emit(crb, masm, opcode, dst, dst, src2, info);
             return;
         } else if (src2 instanceof HSAILAddressValue) {
             assert (!(src1 instanceof HSAILAddressValue));
             masm.emitLda(dst, ((HSAILAddressValue) src2).toAddress());
-            emit(tasm, masm, opcode, dst, src1, dst, info);
+            emit(crb, masm, opcode, dst, src1, dst, info);
             return;
         }
         int exceptionOffset = -1;
@@ -411,7 +436,7 @@ public enum HSAILArithmetic {
         }
         if (info != null) {
             assert exceptionOffset != -1;
-            tasm.recordImplicitException(exceptionOffset, info);
+            crb.recordImplicitException(exceptionOffset, info);
         }
     }
 

@@ -105,10 +105,10 @@ class Deoptimization : AllStatic {
   enum {
     _action_bits = 3,
     _reason_bits = 5,
-    _speculation_id_bits = 23,
+    _debug_id_bits = 23,
     _action_shift = 0,
     _reason_shift = _action_shift+_action_bits,
-    _speculation_id_shift = _reason_shift+_reason_bits,
+    _debug_id_shift = _reason_shift+_reason_bits,
     BC_CASE_LIMIT = PRODUCT_ONLY(1) NOT_PRODUCT(4) // for _deoptimization_hist
   };
 
@@ -294,10 +294,9 @@ class Deoptimization : AllStatic {
       // standard action for unloaded CP entry
       return _unloaded_action;
   }
-  static short trap_request_speculation_id(int trap_request) {
+  static int trap_request_debug_id(int trap_request) {
       if (trap_request < 0)
-        return (DeoptAction)
-          ((~(trap_request) >> _speculation_id_shift) & right_n_bits(_speculation_id_bits));
+        return ((~(trap_request) >> _debug_id_shift) & right_n_bits(_debug_id_bits));
       else
         // standard action for unloaded CP entry
         return 0;
@@ -378,6 +377,9 @@ class Deoptimization : AllStatic {
                                                int trap_bci,
                                                DeoptReason reason,
                                                bool update_total_trap_count,
+#ifdef GRAAL
+                                               bool is_osr,
+#endif
                                                //outputs:
                                                uint& ret_this_trap_count,
                                                bool& ret_maybe_prior_trap,

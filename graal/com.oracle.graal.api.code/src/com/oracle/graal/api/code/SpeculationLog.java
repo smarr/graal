@@ -23,55 +23,47 @@
 package com.oracle.graal.api.code;
 
 import java.util.*;
+import java.util.concurrent.*;
 
 import com.oracle.graal.api.meta.*;
 
 /**
- * Manages a list of unique deoptimization reasons and returns a unique index for each reason. This
- * class is not thread safe and assumes that at every point in time there is only a single Graal
- * compilation accessing this object.
+ * Manages a list of unique deoptimization reasons.
  * 
  */
 public final class SpeculationLog {
+    private volatile Object lastFailed;
+    private volatile Collection<Object> speculations;
+    private Set<Object> failedSpeculations;
 
-    public static final int MAX_CACHE_SIZE = 1 << 15;
-
-    private List<Object> speculations = new ArrayList<>();
-    private boolean[] map = new boolean[10];
-    private Set<Object> snapshot = new HashSet<>();
-
-    private short addSpeculation(Object reason) {
-        short index = (short) speculations.indexOf(reason);
-        if (index != -1) {
-            // Nothing to add, reason already registered.
-            return index;
+    public synchronized void collectFailedSpeculations() {
+        if (lastFailed != null) {
+            if (failedSpeculations == null) {
+                failedSpeculations = new HashSet<>(2);
+            }
+            failedSpeculations.add(lastFailed);
+            lastFailed = null;
+            speculations = null;
         }
-        if (speculations.size() >= MAX_CACHE_SIZE) {
-            throw new BailoutException("Too many deoptimization reasons recorded");
-        }
-        speculations.add(reason);
-        if (map.length < speculations.size()) {
-            map = Arrays.copyOf(map, map.length * 2);
-        }
-        return (short) (speculations.size() - 1);
     }
 
-    public boolean[] getRawMap() {
-        return map;
+    public boolean maySpeculate(Object reason) {
+        if (failedSpeculations != null && failedSpeculations.contains(reason)) {
+            return false;
+        }
+        return true;
     }
 
-    public void snapshot() {
-        for (int i = 0; i < speculations.size(); ++i) {
-            if (map[i]) {
-                snapshot.add(speculations.get(i));
+    public Constant speculate(Object reason) {
+        assert maySpeculate(reason);
+        if (speculations == null) {
+            synchronized (this) {
+                if (speculations == null) {
+                    speculations = new ConcurrentLinkedQueue<>();
+                }
             }
         }
-    }
-
-    public Constant maySpeculate(Object reason) {
-        if (snapshot.contains(reason)) {
-            return null;
-        }
-        return Constant.forShort(addSpeculation(reason));
+        speculations.add(reason);
+        return Constant.forObject(reason);
     }
 }

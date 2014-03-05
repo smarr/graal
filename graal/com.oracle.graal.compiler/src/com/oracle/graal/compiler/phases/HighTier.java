@@ -28,6 +28,7 @@ import static com.oracle.graal.phases.GraalOptions.*;
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.loop.phases.*;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.options.*;
 import com.oracle.graal.phases.*;
 import com.oracle.graal.phases.common.*;
@@ -48,7 +49,7 @@ public class HighTier extends PhaseSuite<HighTierContext> {
     }
 
     public HighTier() {
-        CanonicalizerPhase canonicalizer = new CanonicalizerPhase(!AOTCompilation.getValue());
+        CanonicalizerPhase canonicalizer = new CanonicalizerPhase(!ImmutableCode.getValue());
 
         if (VerifyUsageWithEquals.getValue()) {
             appendPhase(new VerifyUsageWithEquals(Value.class));
@@ -101,6 +102,6 @@ public class HighTier extends PhaseSuite<HighTierContext> {
             appendPhase(canonicalizer);
         }
 
-        appendPhase(new LoweringPhase(canonicalizer));
+        appendPhase(new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.HIGH_TIER));
     }
 }

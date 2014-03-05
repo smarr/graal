@@ -46,7 +46,6 @@ import com.oracle.graal.lir.LIRInstruction.StateProcedure;
 import com.oracle.graal.lir.LIRInstruction.ValueProcedure;
 import com.oracle.graal.lir.StandardOp.MoveOp;
 import com.oracle.graal.nodes.cfg.*;
-import com.oracle.graal.options.*;
 import com.oracle.graal.phases.util.*;
 
 /**
@@ -56,13 +55,6 @@ import com.oracle.graal.phases.util.*;
  * Hanspeter Moessenboeck.
  */
 public final class LinearScan {
-
-    static class Options {
-        // @formatter:off
-        @Option(help = "The trace level for the linear scan register allocator")
-        public static final OptionValue<Integer> TraceLinearScanLevel = new OptionValue<>(0);
-        // @formatter:on
-    }
 
     final TargetDescription target;
     final LIR ir;
@@ -166,8 +158,6 @@ public final class LinearScan {
      */
     private final int firstVariableNumber;
 
-    private final int traceLevel;
-
     public LinearScan(TargetDescription target, LIR ir, LIRGenerator gen, FrameMap frameMap) {
         this.target = target;
         this.ir = ir;
@@ -180,11 +170,6 @@ public final class LinearScan {
         this.firstVariableNumber = registers.length;
         this.variables = new ArrayList<>(ir.numVariables() * 3 / 2);
         this.blockData = new BlockMap<>(ir.cfg);
-        traceLevel = Options.TraceLinearScanLevel.getValue();
-    }
-
-    int getTraceLevel() {
-        return traceLevel;
     }
 
     public int getFirstLirInstructionId(Block block) {
@@ -263,11 +248,11 @@ public final class LinearScan {
         }
     };
 
-    static final IntervalPredicate IS_OOP_INTERVAL = new IntervalPredicate() {
+    static final IntervalPredicate IS_STACK_INTERVAL = new IntervalPredicate() {
 
         @Override
         public boolean apply(Interval i) {
-            return !isRegister(i.operand) && i.kind() == Kind.Object;
+            return !isRegister(i.operand);
         }
     };
 
@@ -282,7 +267,9 @@ public final class LinearScan {
     void assignSpillSlot(Interval interval) {
         // assign the canonical spill slot of the parent (if a part of the interval
         // is already spilled) or allocate a new spill slot
-        if (interval.spillSlot() != null) {
+        if (interval.canMaterialize()) {
+            interval.assignLocation(Value.ILLEGAL);
+        } else if (interval.spillSlot() != null) {
             interval.assignLocation(interval.spillSlot());
         } else {
             StackSlot slot = frameMap.allocateSpillSlot(interval.kind());
@@ -519,9 +506,7 @@ public final class LinearScan {
 
     // called once before assignment of register numbers
     void eliminateSpillMoves() {
-        if (getTraceLevel() >= 3) {
-            TTY.println(" Eliminating unnecessary spill moves");
-        }
+        Indent indent = Debug.logAndIndent("Eliminating unnecessary spill moves");
 
         // collect all intervals that must be stored after their definition.
         // the list is sorted by Interval.spillDefinitionPos
@@ -553,8 +538,8 @@ public final class LinearScan {
                     if (!isRegister(curInterval.location()) && curInterval.alwaysInMemory()) {
                         // move target is a stack slot that is always correct, so eliminate
                         // instruction
-                        if (getTraceLevel() >= 4) {
-                            TTY.println("eliminating move from interval %d to %d", operandNumber(move.getInput()), operandNumber(move.getResult()));
+                        if (Debug.isLogEnabled()) {
+                            Debug.log("eliminating move from interval %d to %d", operandNumber(move.getInput()), operandNumber(move.getResult()));
                         }
                         instructions.set(j, null); // null-instructions are deleted by assignRegNum
                     }
@@ -565,25 +550,23 @@ public final class LinearScan {
                     assert interval == Interval.EndMarker || (interval.isSplitParent() && interval.spillState() == SpillState.StoreAtDefinition) : "invalid interval";
 
                     while (interval != Interval.EndMarker && interval.spillDefinitionPos() == opId) {
-                        if (!insertionBuffer.initialized()) {
-                            // prepare insertion buffer (appended when all instructions of the block
-                            // are processed)
-                            insertionBuffer.init(instructions);
+                        if (!interval.canMaterialize()) {
+                            if (!insertionBuffer.initialized()) {
+                                // prepare insertion buffer (appended when all instructions of the
+                                // block are processed)
+                                insertionBuffer.init(instructions);
+                            }
+
+                            AllocatableValue fromLocation = interval.location();
+                            AllocatableValue toLocation = canonicalSpillOpr(interval);
+
+                            assert isRegister(fromLocation) : "from operand must be a register but is: " + fromLocation + " toLocation=" + toLocation + " spillState=" + interval.spillState();
+                            assert isStackSlot(toLocation) : "to operand must be a stack slot";
+
+                            insertionBuffer.append(j + 1, ir.spillMoveFactory.createMove(toLocation, fromLocation));
+
+                            Debug.log("inserting move after definition of interval %d to stack slot %s at opId %d", interval.operandNumber, interval.spillSlot(), opId);
                         }
-
-                        AllocatableValue fromLocation = interval.location();
-                        AllocatableValue toLocation = canonicalSpillOpr(interval);
-
-                        assert isRegister(fromLocation) : "from operand must be a register but is: " + fromLocation + " toLocation=" + toLocation + " spillState=" + interval.spillState();
-                        assert isStackSlot(toLocation) : "to operand must be a stack slot";
-
-                        insertionBuffer.append(j + 1, ir.spillMoveFactory.createMove(toLocation, fromLocation));
-
-                        if (getTraceLevel() >= 4) {
-                            StackSlot slot = interval.spillSlot();
-                            TTY.println("inserting move after definition of interval %d to stack slot %s at opId %d", interval.operandNumber, slot, opId);
-                        }
-
                         interval = interval.next;
                     }
                 }
@@ -595,9 +578,10 @@ public final class LinearScan {
         } // end of block iteration
 
         assert interval == Interval.EndMarker : "missed an interval";
+        indent.outdent();
     }
 
-    private void checkIntervals(Interval interval) {
+    private static void checkIntervals(Interval interval) {
         Interval prev = null;
         Interval temp = interval;
         while (temp != Interval.EndMarker) {
@@ -607,13 +591,11 @@ public final class LinearScan {
                 assert temp.spillDefinitionPos() >= prev.spillDefinitionPos() : "when intervals are sorted by from :  then they must also be sorted by spillDefinitionPos";
             }
 
-            assert temp.spillSlot() != null : "interval has no spill slot assigned";
+            assert temp.spillSlot() != null || temp.canMaterialize() : "interval has no spill slot assigned";
             assert temp.spillDefinitionPos() >= temp.from() : "invalid order";
             assert temp.spillDefinitionPos() <= temp.from() + 2 : "only intervals defined once at their start-pos can be optimized";
 
-            if (traceLevel >= 4) {
-                TTY.println("interval %d (from %d to %d) must be stored at %d", temp.operandNumber, temp.from(), temp.to(), temp.spillDefinitionPos());
-            }
+            Debug.log("interval %d (from %d to %d) must be stored at %d", temp.operandNumber, temp.from(), temp.to(), temp.spillDefinitionPos());
 
             prev = temp;
             temp = temp.next;
@@ -695,6 +677,8 @@ public final class LinearScan {
 
         // iterate all blocks
         for (final Block block : sortedBlocks) {
+            Indent indent = Debug.logAndIndent("compute local live sets for block %d", block.getId());
+
             final BitSet liveGen = new BitSet(liveSize);
             final BitSet liveKill = new BitSet(liveSize);
 
@@ -713,9 +697,7 @@ public final class LinearScan {
                             int operandNum = operandNumber(operand);
                             if (!liveKill.get(operandNum)) {
                                 liveGen.set(operandNum);
-                                if (getTraceLevel() >= 4) {
-                                    TTY.println("  Setting liveGen for operand %d at instruction %d", operandNum, op.id());
-                                }
+                                Debug.log("liveGen for operand %d", operandNum);
                             }
                             if (block.getLoop() != null) {
                                 intervalInLoop.setBit(operandNum, block.getLoop().index);
@@ -735,9 +717,7 @@ public final class LinearScan {
                         int operandNum = operandNumber(operand);
                         if (!liveKill.get(operandNum)) {
                             liveGen.set(operandNum);
-                            if (getTraceLevel() >= 4) {
-                                TTY.println("  Setting liveGen for LIR opId %d, operand %d because of state for %s", op.id(), operandNum, op);
-                            }
+                            Debug.log("liveGen in state for operand %d", operandNum);
                         }
                         return operand;
                     }
@@ -749,6 +729,7 @@ public final class LinearScan {
                         if (isVariable(operand)) {
                             int varNum = operandNumber(operand);
                             liveKill.set(varNum);
+                            Debug.log("liveKill for operand %d", varNum);
                             if (block.getLoop() != null) {
                                 intervalInLoop.setBit(varNum, block.getLoop().index);
                             }
@@ -764,24 +745,27 @@ public final class LinearScan {
                     }
                 };
 
-                op.forEachInput(useProc);
-                op.forEachAlive(useProc);
-                // Add uses of live locals from interpreter's point of view for proper debug
-                // information generation
-                op.forEachState(stateProc);
-                op.forEachTemp(defProc);
-                op.forEachOutput(defProc);
+                try (Indent indent2 = Debug.logAndIndent("handle op %d", op.id())) {
+                    op.forEachInput(useProc);
+                    op.forEachAlive(useProc);
+                    // Add uses of live locals from interpreter's point of view for proper debug
+                    // information generation
+                    op.forEachState(stateProc);
+                    op.forEachTemp(defProc);
+                    op.forEachOutput(defProc);
+                }
             } // end of instruction iteration
 
-            blockData.get(block).liveGen = liveGen;
-            blockData.get(block).liveKill = liveKill;
-            blockData.get(block).liveIn = new BitSet(liveSize);
-            blockData.get(block).liveOut = new BitSet(liveSize);
+            BlockData blockSets = blockData.get(block);
+            blockSets.liveGen = liveGen;
+            blockSets.liveKill = liveKill;
+            blockSets.liveIn = new BitSet(liveSize);
+            blockSets.liveOut = new BitSet(liveSize);
 
-            if (getTraceLevel() >= 4) {
-                TTY.println("liveGen  B%d %s", block.getId(), blockData.get(block).liveGen);
-                TTY.println("liveKill B%d %s", block.getId(), blockData.get(block).liveKill);
-            }
+            Debug.log("liveGen  B%d %s", block.getId(), blockSets.liveGen);
+            Debug.log("liveKill B%d %s", block.getId(), blockSets.liveKill);
+
+            indent.outdent();
         } // end of block iteration
     }
 
@@ -814,6 +798,7 @@ public final class LinearScan {
      * {@link BlockData#liveIn} and {@link BlockData#liveOut}) for each block.
      */
     void computeGlobalLiveSets() {
+        Indent indent = Debug.logAndIndent("compute global live sets");
         int numBlocks = blockCount();
         boolean changeOccurred;
         boolean changeOccurredInBlock;
@@ -825,9 +810,12 @@ public final class LinearScan {
         do {
             changeOccurred = false;
 
+            Indent indent2 = Debug.logAndIndent("new iteration %d", iterationCount);
+
             // iterate all blocks in reverse order
             for (int i = numBlocks - 1; i >= 0; i--) {
                 Block block = blockAt(i);
+                BlockData blockSets = blockData.get(block);
 
                 changeOccurredInBlock = false;
 
@@ -844,10 +832,10 @@ public final class LinearScan {
                         liveOut.clear();
                     }
 
-                    if (!blockData.get(block).liveOut.equals(liveOut)) {
+                    if (!blockSets.liveOut.equals(liveOut)) {
                         // A change occurred. Swap the old and new live out sets to avoid copying.
-                        BitSet temp = blockData.get(block).liveOut;
-                        blockData.get(block).liveOut = liveOut;
+                        BitSet temp = blockSets.liveOut;
+                        blockSets.liveOut = liveOut;
                         liveOut = temp;
 
                         changeOccurred = true;
@@ -860,15 +848,13 @@ public final class LinearScan {
                     // !liveKill(block))
                     // note: liveIn has to be computed only in first iteration or if liveOut has
                     // changed!
-                    BitSet liveIn = blockData.get(block).liveIn;
+                    BitSet liveIn = blockSets.liveIn;
                     liveIn.clear();
-                    liveIn.or(blockData.get(block).liveOut);
-                    liveIn.andNot(blockData.get(block).liveKill);
-                    liveIn.or(blockData.get(block).liveGen);
-                }
+                    liveIn.or(blockSets.liveOut);
+                    liveIn.andNot(blockSets.liveKill);
+                    liveIn.or(blockSets.liveGen);
 
-                if (getTraceLevel() >= 4) {
-                    traceLiveness(changeOccurredInBlock, iterationCount, block);
+                    Debug.log("block %d: livein = %s,  liveout = %s", block.getId(), liveIn, blockSets.liveOut);
                 }
             }
             iterationCount++;
@@ -876,6 +862,7 @@ public final class LinearScan {
             if (changeOccurred && iterationCount > 50) {
                 throw new BailoutException("too many iterations in computeGlobalLiveSets");
             }
+            indent2.outdent();
         } while (changeOccurred);
 
         if (DetailedAsserts.getValue()) {
@@ -888,55 +875,55 @@ public final class LinearScan {
             if (DetailedAsserts.getValue()) {
                 reportFailure(numBlocks);
             }
-
-            TTY.println("preds=" + startBlock.getPredecessorCount() + ", succs=" + startBlock.getSuccessorCount());
-            TTY.println("startBlock-ID: " + startBlock.getId());
-
             // bailout if this occurs in product mode.
             throw new GraalInternalError("liveIn set of first block must be empty: " + blockData.get(startBlock).liveIn);
         }
+        indent.outdent();
     }
 
     private void reportFailure(int numBlocks) {
-        TTY.println(gen.getGraph().toString());
-        TTY.println("Error: liveIn set of first block must be empty (when this fails, variables are used before they are defined):");
+        Indent indent = Debug.logAndIndent("report failure, graph: %s", gen.getGraph());
+
         BitSet startBlockLiveIn = blockData.get(ir.cfg.getStartBlock()).liveIn;
-        for (int operandNum = startBlockLiveIn.nextSetBit(0); operandNum >= 0; operandNum = startBlockLiveIn.nextSetBit(operandNum + 1)) {
-            Value operand = operandFor(operandNum);
-            TTY.println("  var %d; operand=%s; node=%s", operandNum, operand.toString(), gen.valueForOperand(operand));
+        try (Indent indent2 = Debug.logAndIndent("Error: liveIn set of first block must be empty (when this fails, variables are used before they are defined):")) {
+            for (int operandNum = startBlockLiveIn.nextSetBit(0); operandNum >= 0; operandNum = startBlockLiveIn.nextSetBit(operandNum + 1)) {
+                Value operand = operandFor(operandNum);
+                Debug.log("var %d; operand=%s; node=%s", operandNum, operand, gen.valueForOperand(operand));
+            }
         }
 
         // print some additional information to simplify debugging
         for (int operandNum = startBlockLiveIn.nextSetBit(0); operandNum >= 0; operandNum = startBlockLiveIn.nextSetBit(operandNum + 1)) {
             Value operand = operandFor(operandNum);
-            TTY.println("---- Detailed information for var %d; operand=%s; node=%s ----", operandNum, operand.toString(), gen.valueForOperand(operand));
+            final Indent indent2 = Debug.logAndIndent("---- Detailed information for var %d; operand=%s; node=%s ----", operandNum, operand, gen.valueForOperand(operand));
 
             Deque<Block> definedIn = new ArrayDeque<>();
             HashSet<Block> usedIn = new HashSet<>();
             for (Block block : sortedBlocks) {
                 if (blockData.get(block).liveGen.get(operandNum)) {
                     usedIn.add(block);
-                    TTY.println("used in block B%d {", block.getId());
-                    for (LIRInstruction ins : ir.lir(block)) {
-                        TTY.println("  " + ins.id() + ": " + ins.toString());
-                        ins.forEachState(new ValueProcedure() {
+                    try (Indent indent3 = Debug.logAndIndent("used in block B%d", block.getId())) {
+                        for (LIRInstruction ins : ir.lir(block)) {
+                            try (Indent indent4 = Debug.logAndIndent("%d: %s", ins.id(), ins)) {
+                                ins.forEachState(new ValueProcedure() {
 
-                            @Override
-                            public Value doValue(Value liveStateOperand) {
-                                TTY.println("    operand=" + liveStateOperand);
-                                return liveStateOperand;
+                                    @Override
+                                    public Value doValue(Value liveStateOperand) {
+                                        Debug.log("operand=%s", liveStateOperand);
+                                        return liveStateOperand;
+                                    }
+                                });
                             }
-                        });
+                        }
                     }
-                    TTY.println("}");
                 }
                 if (blockData.get(block).liveKill.get(operandNum)) {
                     definedIn.add(block);
-                    TTY.println("defined in block B%d {", block.getId());
-                    for (LIRInstruction ins : ir.lir(block)) {
-                        TTY.println("  " + ins.id() + ": " + ins.toString());
+                    try (Indent indent3 = Debug.logAndIndent("defined in block B%d", block.getId())) {
+                        for (LIRInstruction ins : ir.lir(block)) {
+                            Debug.log("%d: %s", ins.id(), ins);
+                        }
                     }
-                    TTY.println("}");
                 }
             }
 
@@ -957,12 +944,14 @@ public final class LinearScan {
                     }
                 }
             }
-            TTY.print("**** offending usages are in: ");
-            for (Block block : usedIn) {
-                TTY.print("B%d ", block.getId());
+            try (Indent indent3 = Debug.logAndIndent("**** offending usages are in: ")) {
+                for (Block block : usedIn) {
+                    Debug.log("B%d", block.getId());
+                }
             }
-            TTY.println();
+            indent2.outdent();
         }
+        indent.outdent();
     }
 
     private void verifyLiveness() {
@@ -977,20 +966,9 @@ public final class LinearScan {
         }
     }
 
-    private void traceLiveness(boolean changeOccurredInBlock, int iterationCount, Block block) {
-        char c = iterationCount == 0 || changeOccurredInBlock ? '*' : ' ';
-        TTY.print("(%d) liveIn%c  B%d ", iterationCount, c, block.getId());
-        TTY.println(blockData.get(block).liveIn.toString());
-        TTY.print("(%d) liveOut%c B%d ", iterationCount, c, block.getId());
-        TTY.println(blockData.get(block).liveOut.toString());
-    }
-
     void addUse(AllocatableValue operand, int from, int to, RegisterPriority registerPriority, PlatformKind kind) {
         if (!isProcessed(operand)) {
             return;
-        }
-        if (getTraceLevel() >= 2 && kind == null) {
-            TTY.println(" use %s from %d to %d (%s)", operand, from, to, registerPriority.name());
         }
 
         Interval interval = getOrCreateInterval(operand);
@@ -1002,14 +980,13 @@ public final class LinearScan {
 
         // Register use position at even instruction id.
         interval.addUsePos(to & ~1, registerPriority);
+
+        Debug.log("add use: %s, from %d to %d (%s)", interval, from, to, registerPriority.name());
     }
 
     void addTemp(AllocatableValue operand, int tempPos, RegisterPriority registerPriority, PlatformKind kind) {
         if (!isProcessed(operand)) {
             return;
-        }
-        if (getTraceLevel() >= 2) {
-            TTY.println(" temp %s tempPos %d (%s)", operand, tempPos, RegisterPriority.MustHaveRegister.name());
         }
 
         Interval interval = getOrCreateInterval(operand);
@@ -1019,19 +996,20 @@ public final class LinearScan {
 
         interval.addRange(tempPos, tempPos + 1);
         interval.addUsePos(tempPos, registerPriority);
+        interval.addMaterializationValue(null);
+
+        Debug.log("add temp: %s tempPos %d (%s)", interval, tempPos, RegisterPriority.MustHaveRegister.name());
     }
 
     boolean isProcessed(Value operand) {
         return !isRegister(operand) || attributes(asRegister(operand)).isAllocatable();
     }
 
-    void addDef(AllocatableValue operand, int defPos, RegisterPriority registerPriority, PlatformKind kind) {
+    void addDef(AllocatableValue operand, LIRInstruction op, RegisterPriority registerPriority, PlatformKind kind) {
         if (!isProcessed(operand)) {
             return;
         }
-        if (getTraceLevel() >= 2) {
-            TTY.println(" def %s defPos %d (%s)", operand, defPos, registerPriority.name());
-        }
+        int defPos = op.id();
 
         Interval interval = getOrCreateInterval(operand);
         if (kind != Kind.Illegal) {
@@ -1050,9 +1028,7 @@ public final class LinearScan {
             // also add register priority for dead intervals
             interval.addRange(defPos, defPos + 1);
             interval.addUsePos(defPos, registerPriority);
-            if (getTraceLevel() >= 2) {
-                TTY.println("Warning: def of operand %s at %d occurs without use", operand, defPos);
-            }
+            Debug.log("Warning: def of operand %s at %d occurs without use", operand, defPos);
         }
 
         changeSpillDefinitionPos(interval, defPos);
@@ -1060,6 +1036,9 @@ public final class LinearScan {
             // detection of method-parameters and roundfp-results
             interval.setSpillState(SpillState.StartInMemory);
         }
+        interval.addMaterializationValue(gen.getMaterializedValue(op, operand, interval));
+
+        Debug.log("add def: %s defPos %d (%s)", interval, defPos, registerPriority.name());
     }
 
     /**
@@ -1111,9 +1090,7 @@ public final class LinearScan {
                     assert blockForId(op.id()).getPredecessorCount() == 0 : "move from stack must be in first block";
                     assert isVariable(move.getResult()) : "result of move must be a variable";
 
-                    if (getTraceLevel() >= 4) {
-                        TTY.println("found move from stack slot %s to %s", slot, move.getResult());
-                    }
+                    Debug.log("found move from stack slot %s to %s", slot, move.getResult());
                 }
 
                 Interval interval = intervalFor(move.getResult());
@@ -1140,10 +1117,8 @@ public final class LinearScan {
                         } else {
                             from.setLocationHint(to);
                         }
+                        Debug.log("operation at opId %d: added hint from interval %d to %d", op.id(), from.operandNumber, to.operandNumber);
 
-                        if (getTraceLevel() >= 4) {
-                            TTY.println("operation at opId %d: added hint from interval %d to %d", op.id(), from.operandNumber, to.operandNumber);
-                        }
                         return registerHint;
                     }
                     return null;
@@ -1153,6 +1128,9 @@ public final class LinearScan {
     }
 
     void buildIntervals() {
+
+        Indent indent = Debug.logAndIndent("build intervals");
+
         intervalsSize = operandSize();
         intervals = new Interval[intervalsSize + INITIAL_SPLIT_INTERVALS_CAPACITY];
 
@@ -1161,7 +1139,10 @@ public final class LinearScan {
 
         // iterate all blocks in reverse order
         for (int i = blockCount() - 1; i >= 0; i--) {
+
             Block block = blockAt(i);
+            Indent indent2 = Debug.logAndIndent("handle block %d", block.getId());
+
             List<LIRInstruction> instructions = ir.lir(block);
             final int blockFrom = getFirstLirInstructionId(block);
             int blockTo = getLastLirInstructionId(block);
@@ -1174,9 +1155,7 @@ public final class LinearScan {
             for (int operandNum = live.nextSetBit(0); operandNum >= 0; operandNum = live.nextSetBit(operandNum + 1)) {
                 assert live.get(operandNum) : "should not stop here otherwise";
                 AllocatableValue operand = operandFor(operandNum);
-                if (getTraceLevel() >= 2) {
-                    TTY.println("live in %s to %d", operand, blockTo + 2);
-                }
+                Debug.log("live in %d: %s", operandNum, operand);
 
                 addUse(operand, blockFrom, blockTo + 2, RegisterPriority.None, Kind.Illegal);
 
@@ -1195,6 +1174,8 @@ public final class LinearScan {
                 final LIRInstruction op = instructions.get(j);
                 final int opId = op.id();
 
+                Indent indent3 = Debug.logAndIndent("handle inst %d: %s", opId, op);
+
                 // add a temp range for each register if operation destroys caller-save registers
                 if (op.destroysCallerSavedRegisters()) {
                     for (Register r : callerSaveRegs) {
@@ -1202,9 +1183,7 @@ public final class LinearScan {
                             addTemp(r.asValue(), opId, RegisterPriority.None, Kind.Illegal);
                         }
                     }
-                    if (getTraceLevel() >= 4) {
-                        TTY.println("operation destroys all caller-save registers");
-                    }
+                    Debug.log("operation destroys all caller-save registers");
                 }
 
                 op.forEachOutput(new ValueProcedure() {
@@ -1212,7 +1191,7 @@ public final class LinearScan {
                     @Override
                     public Value doValue(Value operand, OperandMode mode, EnumSet<OperandFlag> flags) {
                         if (isVariableOrRegister(operand)) {
-                            addDef((AllocatableValue) operand, opId, registerPriorityOfOutputOperand(op), operand.getPlatformKind());
+                            addDef((AllocatableValue) operand, op, registerPriorityOfOutputOperand(op), operand.getPlatformKind());
                             addRegisterHint(op, operand, mode, flags, true);
                         }
                         return operand;
@@ -1270,7 +1249,10 @@ public final class LinearScan {
                 // special steps for some instructions (especially moves)
                 handleMethodArguments(op);
 
+                indent3.outdent();
+
             } // end of instruction iteration
+            indent2.outdent();
         } // end of block iteration
 
         // add the range [0, 1] to all fixed intervals.
@@ -1280,6 +1262,7 @@ public final class LinearScan {
                 interval.addRange(0, 1);
             }
         }
+        indent.outdent();
     }
 
     // * Phase 5: actual register allocation
@@ -1431,6 +1414,7 @@ public final class LinearScan {
     };
 
     public void allocateRegisters() {
+        Indent indent = Debug.logAndIndent("allocate registers");
         Interval precoloredIntervals;
         Interval notPrecoloredIntervals;
 
@@ -1442,6 +1426,7 @@ public final class LinearScan {
         LinearScanWalker lsw = new LinearScanWalker(this, precoloredIntervals, notPrecoloredIntervals);
         lsw.walk();
         lsw.finishAllocation();
+        indent.outdent();
     }
 
     // * Phase 6: resolve data flow
@@ -1453,9 +1438,7 @@ public final class LinearScan {
         Interval result = interval.getSplitChildAtOpId(opId, mode, this);
 
         if (result != null) {
-            if (getTraceLevel() >= 4) {
-                TTY.println("Split child at pos " + opId + " of interval " + interval.toString() + " is " + result.toString());
-            }
+            Debug.log("Split child at pos %d of interval %s is %s", opId, interval, result);
             return result;
         }
 
@@ -1507,9 +1490,7 @@ public final class LinearScan {
 
     void resolveFindInsertPos(Block fromBlock, Block toBlock, MoveResolver moveResolver) {
         if (fromBlock.getSuccessorCount() <= 1) {
-            if (getTraceLevel() >= 4) {
-                TTY.println("inserting moves at end of fromBlock B%d", fromBlock.getId());
-            }
+            Debug.log("inserting moves at end of fromBlock B%d", fromBlock.getId());
 
             List<LIRInstruction> instructions = ir.lir(fromBlock);
             LIRInstruction instr = instructions.get(instructions.size() - 1);
@@ -1521,9 +1502,7 @@ public final class LinearScan {
             }
 
         } else {
-            if (getTraceLevel() >= 4) {
-                TTY.println("inserting moves at beginning of toBlock B%d", toBlock.getId());
-            }
+            Debug.log("inserting moves at beginning of toBlock B%d", toBlock.getId());
 
             if (DetailedAsserts.getValue()) {
                 assert ir.lir(fromBlock).get(0) instanceof StandardOp.LabelOp : "block does not start with a label";
@@ -1546,6 +1525,8 @@ public final class LinearScan {
      * have been split.
      */
     void resolveDataFlow() {
+        Indent indent = Debug.logAndIndent("resolve data flow");
+
         int numBlocks = blockCount();
         MoveResolver moveResolver = new MoveResolver(this);
         BitSet blockCompleted = new BitSet(numBlocks);
@@ -1566,9 +1547,8 @@ public final class LinearScan {
 
                     // prevent optimization of two consecutive blocks
                     if (!blockCompleted.get(pred.getLinearScanNumber()) && !blockCompleted.get(sux.getLinearScanNumber())) {
-                        if (getTraceLevel() >= 3) {
-                            TTY.println(" optimizing empty block B%d (pred: B%d, sux: B%d)", block.getId(), pred.getId(), sux.getId());
-                        }
+                        Debug.log(" optimizing empty block B%d (pred: B%d, sux: B%d)", block.getId(), pred.getId(), sux.getId());
+
                         blockCompleted.set(block.getLinearScanNumber());
 
                         // directly resolve between pred and sux (without looking at the empty block
@@ -1593,9 +1573,8 @@ public final class LinearScan {
                     // check for duplicate edges between the same blocks (can happen with switch
                     // blocks)
                     if (!alreadyResolved.get(toBlock.getLinearScanNumber())) {
-                        if (getTraceLevel() >= 3) {
-                            TTY.println(" processing edge between B%d and B%d", fromBlock.getId(), toBlock.getId());
-                        }
+                        Debug.log("processing edge between B%d and B%d", fromBlock.getId(), toBlock.getId());
+
                         alreadyResolved.set(toBlock.getLinearScanNumber());
 
                         // collect all intervals that have been split between fromBlock and toBlock
@@ -1608,6 +1587,7 @@ public final class LinearScan {
                 }
             }
         }
+        indent.outdent();
     }
 
     // * Phase 7: assign register numbers back to LIR
@@ -1652,15 +1632,32 @@ public final class LinearScan {
             interval = splitChildAtOpId(interval, opId, mode);
         }
 
+        if (isIllegal(interval.location()) && interval.canMaterialize()) {
+            assert mode != OperandMode.DEF;
+            return interval.getMaterializedValue();
+        }
         return interval.location();
     }
 
-    IntervalWalker initComputeOopMaps() {
+    private boolean isMaterialized(AllocatableValue operand, int opId, OperandMode mode) {
+        Interval interval = intervalFor(operand);
+        assert interval != null : "interval must exist";
+
+        if (opId != -1) {
+            // operands are not changed when an interval is split during allocation,
+            // so search the right interval here
+            interval = splitChildAtOpId(interval, opId, mode);
+        }
+
+        return isIllegal(interval.location()) && interval.canMaterialize();
+    }
+
+    protected IntervalWalker initIntervalWalker(IntervalPredicate predicate) {
         // setup lists of potential oops for walking
         Interval oopIntervals;
         Interval nonOopIntervals;
 
-        oopIntervals = createUnhandledLists(IS_OOP_INTERVAL, null).first;
+        oopIntervals = createUnhandledLists(predicate, null).first;
 
         // intervals that have no oops inside need not to be processed.
         // to ensure a walking until the last instruction id, add a dummy interval
@@ -1671,10 +1668,12 @@ public final class LinearScan {
         return new IntervalWalker(this, oopIntervals, nonOopIntervals);
     }
 
-    void computeOopMap(IntervalWalker iw, LIRInstruction op, BitSet registerRefMap, BitSet frameRefMap) {
-        if (getTraceLevel() >= 3) {
-            TTY.println("creating oop map at opId %d", op.id());
-        }
+    /**
+     * Visits all intervals for a frame state. The frame state use this information to build the OOP
+     * maps.
+     */
+    void markFrameLocations(IntervalWalker iw, LIRInstruction op, LIRFrameState info) {
+        Debug.log("creating oop map at opId %d", op.id());
 
         // walk before the current operation . intervals that start at
         // the operation (i.e. output operands of the operation) are not
@@ -1694,11 +1693,11 @@ public final class LinearScan {
             // moves, any intervals which end at this instruction are included
             // in the oop map since we may safepoint while doing the patch
             // before we've consumed the inputs.
-            if (op.id() < interval.currentTo()) {
+            if (op.id() < interval.currentTo() && !isIllegal(interval.location())) {
                 // caller-save registers must not be included into oop-maps at calls
                 assert !op.destroysCallerSavedRegisters() || !isRegister(operand) || !isCallerSave(operand) : "interval is in a caller-save register at a call . register will be overwritten";
 
-                frameMap.setReference(interval.location(), registerRefMap, frameRefMap);
+                info.markLocation(interval.location(), frameMap);
 
                 // Spill optimization: when the stack value is guaranteed to be always correct,
                 // then it must be added to the oop map even if the interval is currently in a
@@ -1707,7 +1706,7 @@ public final class LinearScan {
                     assert interval.spillDefinitionPos() > 0 : "position not set correctly";
                     assert interval.spillSlot() != null : "no spill slot assigned";
                     assert !isRegister(interval.operand) : "interval is on stack :  so stack slot is registered twice";
-                    frameMap.setReference(interval.spillSlot(), registerRefMap, frameRefMap);
+                    info.markLocation(interval.spillSlot(), frameMap);
                 }
             }
         }
@@ -1718,9 +1717,8 @@ public final class LinearScan {
     }
 
     private void computeDebugInfo(IntervalWalker iw, final LIRInstruction op, LIRFrameState info) {
-        BitSet registerRefMap = op.destroysCallerSavedRegisters() && callKillsRegisters ? null : frameMap.initRegisterRefMap();
-        BitSet frameRefMap = frameMap.initFrameRefMap();
-        computeOopMap(iw, op, registerRefMap, frameRefMap);
+        info.initDebugInfo(frameMap, !op.destroysCallerSavedRegisters() || !callKillsRegisters);
+        markFrameLocations(iw, op, info);
 
         info.forEachState(new ValueProcedure() {
 
@@ -1750,12 +1748,11 @@ public final class LinearScan {
                 // the intervals
                 // if the interval is not live, colorLirOperand will cause an assert on failure
                 Value result = colorLirOperand((Variable) operand, tempOpId, mode);
-                assert !hasCall(tempOpId) || isStackSlot(result) || !isCallerSave(result) : "cannot have caller-save register operands at calls";
+                assert !hasCall(tempOpId) || isStackSlot(result) || isConstant(result) || !isCallerSave(result) : "cannot have caller-save register operands at calls";
                 return result;
             }
         });
-
-        info.finish(registerRefMap, frameRefMap);
+        info.finish(op, frameMap);
     }
 
     private void assignLocations(List<LIRInstruction> instructions, final IntervalWalker iw) {
@@ -1767,6 +1764,23 @@ public final class LinearScan {
             if (op == null) { // this can happen when spill-moves are removed in eliminateSpillMoves
                 hasDead = true;
                 continue;
+            }
+
+            // remove useless moves
+            MoveOp move = null;
+            if (op instanceof MoveOp) {
+                move = (MoveOp) op;
+                AllocatableValue result = move.getResult();
+                if (isVariable(result) && isMaterialized(result, op.id(), OperandMode.DEF)) {
+                    /*
+                     * This happens if a materializable interval is originally not spilled but then
+                     * kicked out in LinearScanWalker.splitForSpilling(). When kicking out such an
+                     * interval this move operation was already generated.
+                     */
+                    instructions.set(j, null);
+                    hasDead = true;
+                    continue;
+                }
             }
 
             ValueProcedure assignProc = new ValueProcedure() {
@@ -1795,8 +1809,7 @@ public final class LinearScan {
             });
 
             // remove useless moves
-            if (op instanceof MoveOp) {
-                MoveOp move = (MoveOp) op;
+            if (move != null) {
                 if (move.getInput().equals(move.getResult())) {
                     instructions.set(j, null);
                     hasDead = true;
@@ -1811,13 +1824,22 @@ public final class LinearScan {
     }
 
     private void assignLocations() {
-        IntervalWalker iw = initComputeOopMaps();
-        for (Block block : sortedBlocks) {
-            assignLocations(ir.lir(block), iw);
+        IntervalWalker iw = initIntervalWalker(IS_STACK_INTERVAL);
+        try (Indent indent = Debug.logAndIndent("assign locations")) {
+            for (Block block : sortedBlocks) {
+                try (Indent indent2 = Debug.logAndIndent("assign locations in block B%d", block.getId())) {
+                    assignLocations(ir.lir(block), iw);
+                }
+            }
         }
     }
 
     public void allocate() {
+
+        /*
+         * This is the point to enable debug logging for the whole register allocation.
+         */
+        Indent indent = Debug.logAndIndent("LinearScan allocate %s", gen.getGraph().method());
 
         try (Scope s = Debug.scope("LifetimeAnalysis")) {
             numberInstructions();
@@ -1865,39 +1887,28 @@ public final class LinearScan {
             throw Debug.handle(e);
         }
 
-        try (Scope s = Debug.scope("ControlFlowOptimizations")) {
-            printLir("After register number assignment", true);
-            EdgeMoveOptimizer.optimize(ir);
-            ControlFlowOptimizer.optimize(ir);
-            NullCheckOptimizer.optimize(ir, target.implicitNullCheckLimit);
-            printLir("After control flow optimization", false);
-        } catch (Throwable e) {
-            throw Debug.handle(e);
-        }
+        printLir("After register number assignment", true);
+
+        indent.outdent();
     }
 
     void printIntervals(String label) {
-        if (getTraceLevel() >= 1) {
-            int i;
-            TTY.println();
-            TTY.println(label);
+        if (Debug.isLogEnabled()) {
+            try (Indent indent = Debug.logAndIndent("intervals %s", label)) {
+                for (Interval interval : intervals) {
+                    if (interval != null) {
+                        Debug.log("%s", interval.logString(this));
+                    }
+                }
 
-            for (Interval interval : intervals) {
-                if (interval != null) {
-                    TTY.out().println(interval.logString(this));
+                try (Indent indent2 = Debug.logAndIndent("Basic Blocks")) {
+                    for (int i = 0; i < blockCount(); i++) {
+                        Block block = blockAt(i);
+                        Debug.log("B%d [%d, %d, %s] ", block.getId(), getFirstLirInstructionId(block), getLastLirInstructionId(block), block.getLoop());
+                    }
                 }
             }
-
-            TTY.println();
-            TTY.println("--- Basic Blocks ---");
-            for (i = 0; i < blockCount(); i++) {
-                Block block = blockAt(i);
-                TTY.print("B%d [%d, %d, %s] ", block.getId(), getFirstLirInstructionId(block), getLastLirInstructionId(block), block.getLoop());
-            }
-            TTY.println();
-            TTY.println();
         }
-
         Debug.dump(Arrays.copyOf(intervals, intervalsSize), label);
     }
 
@@ -1907,104 +1918,95 @@ public final class LinearScan {
 
     boolean verify() {
         // (check that all intervals have a correct register and that no registers are overwritten)
-        if (getTraceLevel() >= 2) {
-            TTY.println(" verifying intervals *");
-        }
         verifyIntervals();
 
-        if (getTraceLevel() >= 2) {
-            TTY.println(" verifying that no oops are in fixed intervals *");
-        }
         // verifyNoOopsInFixedIntervals();
 
-        if (getTraceLevel() >= 2) {
-            TTY.println(" verifying that unpinned constants are not alive across block boundaries");
-        }
         verifyConstants();
 
-        if (getTraceLevel() >= 2) {
-            TTY.println(" verifying register allocation *");
-        }
         verifyRegisters();
 
-        if (getTraceLevel() >= 2) {
-            TTY.println(" no errors found *");
-        }
+        Debug.log("no errors found");
 
         return true;
     }
 
     private void verifyRegisters() {
-        RegisterVerifier verifier = new RegisterVerifier(this);
-        verifier.verify(blockAt(0));
+        // Enable this logging to get output for the verification process.
+        try (Indent indent = Debug.logAndIndent("verifying register allocation")) {
+            RegisterVerifier verifier = new RegisterVerifier(this);
+            verifier.verify(blockAt(0));
+        }
     }
 
     void verifyIntervals() {
-        int len = intervalsSize;
+        try (Indent indent = Debug.logAndIndent("verifying intervals")) {
+            int len = intervalsSize;
 
-        for (int i = 0; i < len; i++) {
-            Interval i1 = intervals[i];
-            if (i1 == null) {
-                continue;
-            }
+            for (int i = 0; i < len; i++) {
+                Interval i1 = intervals[i];
+                if (i1 == null) {
+                    continue;
+                }
 
-            i1.checkSplitChildren();
+                i1.checkSplitChildren();
 
-            if (i1.operandNumber != i) {
-                TTY.println("Interval %d is on position %d in list", i1.operandNumber, i);
-                TTY.println(i1.logString(this));
-                throw new GraalInternalError("");
-            }
-
-            if (isVariable(i1.operand) && i1.kind() == Kind.Illegal) {
-                TTY.println("Interval %d has no type assigned", i1.operandNumber);
-                TTY.println(i1.logString(this));
-                throw new GraalInternalError("");
-            }
-
-            if (i1.location() == null) {
-                TTY.println("Interval %d has no register assigned", i1.operandNumber);
-                TTY.println(i1.logString(this));
-                throw new GraalInternalError("");
-            }
-
-            if (i1.first() == Range.EndMarker) {
-                TTY.println("Interval %d has no Range", i1.operandNumber);
-                TTY.println(i1.logString(this));
-                throw new GraalInternalError("");
-            }
-
-            for (Range r = i1.first(); r != Range.EndMarker; r = r.next) {
-                if (r.from >= r.to) {
-                    TTY.println("Interval %d has zero length range", i1.operandNumber);
-                    TTY.println(i1.logString(this));
+                if (i1.operandNumber != i) {
+                    Debug.log("Interval %d is on position %d in list", i1.operandNumber, i);
+                    Debug.log(i1.logString(this));
                     throw new GraalInternalError("");
                 }
-            }
 
-            for (int j = i + 1; j < len; j++) {
-                Interval i2 = intervals[j];
-                if (i2 == null) {
-                    continue;
+                if (isVariable(i1.operand) && i1.kind() == Kind.Illegal) {
+                    Debug.log("Interval %d has no type assigned", i1.operandNumber);
+                    Debug.log(i1.logString(this));
+                    throw new GraalInternalError("");
                 }
 
-                // special intervals that are created in MoveResolver
-                // . ignore them because the range information has no meaning there
-                if (i1.from() == 1 && i1.to() == 2) {
-                    continue;
+                if (i1.location() == null) {
+                    Debug.log("Interval %d has no register assigned", i1.operandNumber);
+                    Debug.log(i1.logString(this));
+                    throw new GraalInternalError("");
                 }
-                if (i2.from() == 1 && i2.to() == 2) {
-                    continue;
+
+                if (i1.first() == Range.EndMarker) {
+                    Debug.log("Interval %d has no Range", i1.operandNumber);
+                    Debug.log(i1.logString(this));
+                    throw new GraalInternalError("");
                 }
-                Value l1 = i1.location();
-                Value l2 = i2.location();
-                if (i1.intersects(i2) && (l1.equals(l2))) {
-                    if (DetailedAsserts.getValue()) {
-                        TTY.println("Intervals %d and %d overlap and have the same register assigned", i1.operandNumber, i2.operandNumber);
-                        TTY.println(i1.logString(this));
-                        TTY.println(i2.logString(this));
+
+                for (Range r = i1.first(); r != Range.EndMarker; r = r.next) {
+                    if (r.from >= r.to) {
+                        Debug.log("Interval %d has zero length range", i1.operandNumber);
+                        Debug.log(i1.logString(this));
+                        throw new GraalInternalError("");
                     }
-                    throw new BailoutException("");
+                }
+
+                for (int j = i + 1; j < len; j++) {
+                    Interval i2 = intervals[j];
+                    if (i2 == null) {
+                        continue;
+                    }
+
+                    // special intervals that are created in MoveResolver
+                    // . ignore them because the range information has no meaning there
+                    if (i1.from() == 1 && i1.to() == 2) {
+                        continue;
+                    }
+                    if (i2.from() == 1 && i2.to() == 2) {
+                        continue;
+                    }
+                    Value l1 = i1.location();
+                    Value l2 = i2.location();
+                    if (i1.intersects(i2) && !isIllegal(l1) && (l1.equals(l2))) {
+                        if (DetailedAsserts.getValue()) {
+                            Debug.log("Intervals %d and %d overlap and have the same register assigned", i1.operandNumber, i2.operandNumber);
+                            Debug.log(i1.logString(this));
+                            Debug.log(i2.logString(this));
+                        }
+                        throw new BailoutException("");
+                    }
                 }
             }
         }
@@ -2027,44 +2029,46 @@ public final class LinearScan {
     }
 
     void verifyNoOopsInFixedIntervals() {
-        CheckProcedure checkProc = new CheckProcedure();
+        try (Indent indent = Debug.logAndIndent("verifying that no oops are in fixed intervals *")) {
+            CheckProcedure checkProc = new CheckProcedure();
 
-        Interval fixedIntervals;
-        Interval otherIntervals;
-        fixedIntervals = createUnhandledLists(IS_PRECOLORED_INTERVAL, null).first;
-        // to ensure a walking until the last instruction id, add a dummy interval
-        // with a high operation id
-        otherIntervals = new Interval(Value.ILLEGAL, -1);
-        otherIntervals.addRange(Integer.MAX_VALUE - 2, Integer.MAX_VALUE - 1);
-        IntervalWalker iw = new IntervalWalker(this, fixedIntervals, otherIntervals);
+            Interval fixedIntervals;
+            Interval otherIntervals;
+            fixedIntervals = createUnhandledLists(IS_PRECOLORED_INTERVAL, null).first;
+            // to ensure a walking until the last instruction id, add a dummy interval
+            // with a high operation id
+            otherIntervals = new Interval(Value.ILLEGAL, -1);
+            otherIntervals.addRange(Integer.MAX_VALUE - 2, Integer.MAX_VALUE - 1);
+            IntervalWalker iw = new IntervalWalker(this, fixedIntervals, otherIntervals);
 
-        for (Block block : sortedBlocks) {
-            List<LIRInstruction> instructions = ir.lir(block);
+            for (Block block : sortedBlocks) {
+                List<LIRInstruction> instructions = ir.lir(block);
 
-            for (int j = 0; j < instructions.size(); j++) {
-                LIRInstruction op = instructions.get(j);
+                for (int j = 0; j < instructions.size(); j++) {
+                    LIRInstruction op = instructions.get(j);
 
-                if (op.hasState()) {
-                    iw.walkBefore(op.id());
-                    boolean checkLive = true;
+                    if (op.hasState()) {
+                        iw.walkBefore(op.id());
+                        boolean checkLive = true;
 
-                    // Make sure none of the fixed registers is live across an
-                    // oopmap since we can't handle that correctly.
-                    if (checkLive) {
-                        for (Interval interval = iw.activeLists.get(RegisterBinding.Fixed); interval != Interval.EndMarker; interval = interval.next) {
-                            if (interval.currentTo() > op.id() + 1) {
-                                // This interval is live out of this op so make sure
-                                // that this interval represents some value that's
-                                // referenced by this op either as an input or output.
-                                checkProc.curInterval = interval;
-                                checkProc.ok = false;
+                        // Make sure none of the fixed registers is live across an
+                        // oopmap since we can't handle that correctly.
+                        if (checkLive) {
+                            for (Interval interval = iw.activeLists.get(RegisterBinding.Fixed); interval != Interval.EndMarker; interval = interval.next) {
+                                if (interval.currentTo() > op.id() + 1) {
+                                    // This interval is live out of this op so make sure
+                                    // that this interval represents some value that's
+                                    // referenced by this op either as an input or output.
+                                    checkProc.curInterval = interval;
+                                    checkProc.ok = false;
 
-                                op.forEachInput(checkProc);
-                                op.forEachAlive(checkProc);
-                                op.forEachTemp(checkProc);
-                                op.forEachOutput(checkProc);
+                                    op.forEachInput(checkProc);
+                                    op.forEachAlive(checkProc);
+                                    op.forEachTemp(checkProc);
+                                    op.forEachOutput(checkProc);
 
-                                assert checkProc.ok : "fixed intervals should never be live across an oopmap point";
+                                    assert checkProc.ok : "fixed intervals should never be live across an oopmap point";
+                                }
                             }
                         }
                     }
@@ -2074,18 +2078,18 @@ public final class LinearScan {
     }
 
     void verifyConstants() {
-        for (Block block : sortedBlocks) {
-            BitSet liveAtEdge = blockData.get(block).liveIn;
+        try (Indent indent = Debug.logAndIndent("verifying that unpinned constants are not alive across block boundaries")) {
+            for (Block block : sortedBlocks) {
+                BitSet liveAtEdge = blockData.get(block).liveIn;
 
-            // visit all operands where the liveAtEdge bit is set
-            for (int operandNum = liveAtEdge.nextSetBit(0); operandNum >= 0; operandNum = liveAtEdge.nextSetBit(operandNum + 1)) {
-                if (getTraceLevel() >= 4) {
-                    TTY.println("checking interval %d of block B%d", operandNum, block.getId());
+                // visit all operands where the liveAtEdge bit is set
+                for (int operandNum = liveAtEdge.nextSetBit(0); operandNum >= 0; operandNum = liveAtEdge.nextSetBit(operandNum + 1)) {
+                    Debug.log("checking interval %d of block B%d", operandNum, block.getId());
+                    Value operand = operandFor(operandNum);
+                    assert isVariable(operand) : "value must have variable operand";
+                    // TKR assert value.asConstant() == null || value.isPinned() :
+                    // "only pinned constants can be alive accross block boundaries";
                 }
-                Value operand = operandFor(operandNum);
-                assert isVariable(operand) : "value must have variable operand";
-                // TKR assert value.asConstant() == null || value.isPinned() :
-                // "only pinned constants can be alive accross block boundaries";
             }
         }
     }

@@ -55,6 +55,12 @@
   product(intx, TraceGraal, 0,                                              \
           "Trace level for Graal")                                          \
                                                                             \
+  product(intx, GraalCounterSize, 0,                                        \
+          "Reserved size for benchmark counters")                           \
+                                                                            \
+  product(bool, GraalCountersExcludeCompiler, true,                         \
+          "Exclude Graal compiler threads from benchmark counters")         \
+                                                                            \
   product(bool, GraalDeferredInitBarriers, true,                            \
           "Defer write barriers of young objects")                          \
                                                                             \
@@ -75,6 +81,15 @@
                                                                             \
   notproduct(bool, GraalPrintSimpleStubs, false,                            \
           "Print simple Graal stubs")                                       \
+                                                                            \
+  develop(bool, TraceUncollectedSpeculations, false,                        \
+          "Print message when a failed speculation was not collected")      \
+                                                                            \
+  product(bool, GPUOffload, false,                                          \
+          "Offload execution to GPU whenever possible")                     \
+                                                                            \
+  product(bool, TraceGPUInteraction, false,                                 \
+          "Trace external GPU Interaction")                                 \
                                                                             \
 
 

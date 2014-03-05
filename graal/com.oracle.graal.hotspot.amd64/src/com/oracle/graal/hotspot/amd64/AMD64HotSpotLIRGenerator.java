@@ -40,6 +40,7 @@ import com.oracle.graal.compiler.gen.*;
 import com.oracle.graal.debug.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.hotspot.*;
+import com.oracle.graal.hotspot.HotSpotVMConfig.CompressEncoding;
 import com.oracle.graal.hotspot.amd64.AMD64HotSpotMove.CompareAndSwapCompressedOp;
 import com.oracle.graal.hotspot.amd64.AMD64HotSpotMove.LoadCompressedPointer;
 import com.oracle.graal.hotspot.amd64.AMD64HotSpotMove.StoreCompressedConstantOp;
@@ -48,7 +49,7 @@ import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.hotspot.nodes.*;
 import com.oracle.graal.hotspot.stubs.*;
 import com.oracle.graal.lir.*;
-import com.oracle.graal.lir.StandardOp.PlaceholderOp;
+import com.oracle.graal.lir.StandardOp.NoOp;
 import com.oracle.graal.lir.StandardOp.SaveRegistersOp;
 import com.oracle.graal.lir.amd64.*;
 import com.oracle.graal.lir.amd64.AMD64ControlFlow.CondMoveOp;
@@ -59,6 +60,7 @@ import com.oracle.graal.lir.amd64.AMD64Move.StoreConstantOp;
 import com.oracle.graal.lir.amd64.AMD64Move.StoreOp;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
+import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
 
@@ -92,14 +94,14 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
      */
     class SaveRbp {
 
-        final PlaceholderOp placeholder;
+        final NoOp placeholder;
 
         /**
          * The slot reserved for saving RBP.
          */
         final StackSlot reservedSlot;
 
-        public SaveRbp(PlaceholderOp placeholder) {
+        public SaveRbp(NoOp placeholder) {
             this.placeholder = placeholder;
             this.reservedSlot = frameMap.allocateSpillSlot(Kind.Long);
             assert reservedSlot.getRawOffset() == -16 : reservedSlot.getRawOffset();
@@ -156,7 +158,6 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
 
         CallingConvention incomingArguments = cc;
 
-        RegisterValue rbpParam = rbp.asValue(Kind.Long);
         Value[] params = new Value[incomingArguments.getArgumentCount() + 1];
         for (int i = 0; i < params.length - 1; i++) {
             params[i] = toStackKind(incomingArguments.getArgument(i));
@@ -167,17 +168,17 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
                 }
             }
         }
-        params[params.length - 1] = rbpParam;
+        params[params.length - 1] = rbp.asValue(Kind.Long);
 
         emitIncomingValues(params);
 
-        saveRbp = new SaveRbp(new PlaceholderOp(currentBlock, lir.lir(currentBlock).size()));
+        saveRbp = new SaveRbp(new NoOp(currentBlock, lir.lir(currentBlock).size()));
         append(saveRbp.placeholder);
 
-        for (LocalNode local : graph.getNodes(LocalNode.class)) {
-            Value param = params[local.index()];
-            assert param.getKind() == local.kind().getStackKind();
-            setResult(local, emitMove(param));
+        for (ParameterNode param : graph.getNodes(ParameterNode.class)) {
+            Value paramValue = params[param.index()];
+            assert paramValue.getKind() == param.kind().getStackKind();
+            setResult(param, emitMove(paramValue));
         }
     }
 
@@ -348,6 +349,24 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
     }
 
     @Override
+    public void emitCCall(long address, CallingConvention nativeCallingConvention, Value[] args, int numberOfFloatingPointArguments) {
+        Value[] argLocations = new Value[args.length];
+        frameMap.callsMethod(nativeCallingConvention);
+        // TODO(mg): in case a native function uses floating point varargs, the ABI requires that
+        // RAX contains the length of the varargs
+        AllocatableValue numberOfFloatingPointArgumentsRegister = AMD64.rax.asValue();
+        emitMove(numberOfFloatingPointArgumentsRegister, Constant.forInt(numberOfFloatingPointArguments));
+        for (int i = 0; i < args.length; i++) {
+            Value arg = args[i];
+            AllocatableValue loc = nativeCallingConvention.getArgument(i);
+            emitMove(loc, arg);
+            argLocations[i] = loc;
+        }
+        Value ptr = emitMove(Constant.forLong(address));
+        append(new AMD64CCall(nativeCallingConvention.getReturn(), ptr, numberOfFloatingPointArgumentsRegister, argLocations));
+    }
+
+    @Override
     protected void emitDirectCall(DirectCallTargetNode callTarget, Value result, Value[] parameters, Value[] temps, LIRFrameState callState) {
         InvokeKind invokeKind = ((HotSpotDirectCallTargetNode) callTarget).invokeKind();
         if (invokeKind == InvokeKind.Interface || invokeKind == InvokeKind.Virtual) {
@@ -384,29 +403,27 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
         append(new AMD64HotSpotUnwindOp(exceptionParameter));
     }
 
-    private void moveDeoptimizationActionAndReasonToThread(Value actionAndReason) {
-        int pendingDeoptimizationOffset = runtime().getConfig().pendingDeoptimizationOffset;
+    private void moveDeoptValuesToThread(Value actionAndReason, Value speculation) {
+        moveValueToThread(actionAndReason, runtime().getConfig().pendingDeoptimizationOffset);
+        moveValueToThread(speculation, runtime().getConfig().pendingFailedSpeculationOffset);
+    }
+
+    private void moveValueToThread(Value v, int offset) {
         Kind wordKind = getProviders().getCodeCache().getTarget().wordKind;
         RegisterValue thread = getProviders().getRegisters().getThreadRegister().asValue(wordKind);
-        AMD64AddressValue pendingDeoptAddress = new AMD64AddressValue(actionAndReason.getKind(), thread, pendingDeoptimizationOffset);
-        if (actionAndReason instanceof Constant && !getCodeCache().needsDataPatch((Constant) actionAndReason)) {
-            Constant constantActionAndReason = (Constant) actionAndReason;
-            assert !getCodeCache().needsDataPatch(constantActionAndReason);
-            append(new StoreConstantOp(constantActionAndReason.getKind(), pendingDeoptAddress, constantActionAndReason, null));
-        } else {
-            append(new StoreOp(actionAndReason.getKind(), pendingDeoptAddress, load(actionAndReason), null));
-        }
+        AMD64AddressValue address = new AMD64AddressValue(v.getKind(), thread, offset);
+        emitStore(v.getKind(), address, v, null);
     }
 
     @Override
-    public void emitDeoptimize(Value actionAndReason, DeoptimizingNode deopting) {
-        moveDeoptimizationActionAndReasonToThread(actionAndReason);
+    public void emitDeoptimize(Value actionAndReason, Value speculation, DeoptimizingNode deopting) {
+        moveDeoptValuesToThread(actionAndReason, speculation);
         append(new AMD64DeoptimizeOp(state(deopting)));
     }
 
     @Override
     public void emitDeoptimizeCaller(DeoptimizationAction action, DeoptimizationReason reason) {
-        moveDeoptimizationActionAndReasonToThread(getMetaAccess().encodeDeoptActionAndReason(action, reason, 0));
+        moveDeoptValuesToThread(getMetaAccess().encodeDeoptActionAndReason(action, reason, 0), Constant.NULL_OBJECT);
         append(new AMD64HotSpotDeoptimizeCallerOp());
     }
 
@@ -432,6 +449,7 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
 
     @Override
     public void beforeRegisterAllocation() {
+        super.beforeRegisterAllocation();
         boolean hasDebugInfo = lir.hasDebugInfo();
         AllocatableValue savedRbp = saveRbp.finalize(hasDebugInfo);
         if (hasDebugInfo) {
@@ -444,105 +462,106 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
     }
 
     /**
-     * Returns whether or not the input access is a (de)compression candidate.
+     * Returns whether or not the input access should be (de)compressed.
      */
-    private static boolean isCompressCandidate(DeoptimizingNode access) {
-        return access != null && ((HeapAccess) access).isCompressible();
+    private boolean isCompressedOperation(Kind kind, Access access) {
+        return access != null && access.isCompressible() && ((kind == Kind.Long && config.useCompressedClassPointers) || (kind == Kind.Object && config.useCompressedOops));
+    }
+
+    /**
+     * @return a compressed version of the incoming constant
+     */
+    protected static Constant compress(Constant c, CompressEncoding encoding) {
+        if (c.getKind() == Kind.Long) {
+            return Constant.forIntegerKind(Kind.Int, (int) (((c.asLong() - encoding.base) >> encoding.shift) & 0xffffffffL), c.getPrimitiveAnnotation());
+        } else if (c.getKind() == Kind.Object) {
+            return Constant.forNarrowOop(c.asObject());
+        } else {
+            throw GraalInternalError.shouldNotReachHere();
+        }
     }
 
     @Override
-    public Variable emitLoad(Kind kind, Value address, DeoptimizingNode access) {
+    public Variable emitLoad(Kind kind, Value address, Access access) {
         AMD64AddressValue loadAddress = asAddressValue(address);
-        Variable result = newVariable(kind);
-        assert access == null || access instanceof HeapAccess;
+        Variable result = newVariable(kind.getStackKind());
+        LIRFrameState state = null;
+        if (access instanceof DeoptimizingNode) {
+            state = state((DeoptimizingNode) access);
+        }
         /**
          * Currently, the (de)compression of pointers applies conditionally to some objects (oops,
          * kind==Object) and some addresses (klass pointers, kind==Long). Initially, the input
          * operation is checked to discover if it has been tagged as a potential "compression"
          * candidate. Consequently, depending on the appropriate kind, the specific (de)compression
-         * functions are being called. Although, currently, the compression and decompression
-         * algorithms of oops and klass pointers are identical, in hotspot, they are implemented as
-         * separate methods. That means that in the future there might be the case where the
-         * algorithms may differ.
+         * functions are being called.
          */
-        if (isCompressCandidate(access)) {
-            if (config.useCompressedOops && kind == Kind.Object) {
-                append(new LoadCompressedPointer(kind, result, getProviders().getRegisters().getHeapBaseRegister().asValue(), loadAddress, access != null ? state(access) : null, getNarrowKlassBase(),
-                                getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment()));
-            } else if (config.useCompressedClassPointers && kind == Kind.Long) {
-                append(new LoadCompressedPointer(kind, result, getProviders().getRegisters().getHeapBaseRegister().asValue(), loadAddress, access != null ? state(access) : null, getNarrowKlassBase(),
-                                getNarrowOopBase(), getNarrowKlassShift(), getLogKlassAlignment()));
+        if (isCompressedOperation(kind, access)) {
+            if (kind == Kind.Object) {
+                append(new LoadCompressedPointer(kind, result, getProviders().getRegisters().getHeapBaseRegister().asValue(), loadAddress, state, config.getOopEncoding()));
+            } else if (kind == Kind.Long) {
+                Variable scratch = config.getKlassEncoding().base != 0 ? newVariable(Kind.Long) : null;
+                append(new LoadCompressedPointer(kind, result, scratch, loadAddress, state, config.getKlassEncoding()));
             } else {
-                append(new LoadOp(kind, result, loadAddress, access != null ? state(access) : null));
+                throw GraalInternalError.shouldNotReachHere("can't handle: " + access);
             }
         } else {
-            append(new LoadOp(kind, result, loadAddress, access != null ? state(access) : null));
+            append(new LoadOp(kind, result, loadAddress, state));
         }
         return result;
     }
 
     @Override
-    public void emitStore(Kind kind, Value address, Value inputVal, DeoptimizingNode access) {
+    public void emitStore(Kind kind, Value address, Value inputVal, Access access) {
         AMD64AddressValue storeAddress = asAddressValue(address);
-        LIRFrameState state = access != null ? state(access) : null;
+        LIRFrameState state = null;
+        if (access instanceof DeoptimizingNode) {
+            state = state((DeoptimizingNode) access);
+        }
+        boolean isCompressed = isCompressedOperation(kind, access);
         if (isConstant(inputVal)) {
             Constant c = asConstant(inputVal);
-            if (canStoreConstant(c)) {
-                if (inputVal.getKind() == Kind.Object && config.useCompressedOops && isCompressCandidate(access)) {
-                    append(new StoreCompressedConstantOp(kind, storeAddress, c, state));
-                } else if (inputVal.getKind() == Kind.Long && config.useCompressedClassPointers && isCompressCandidate(access)) {
-                    append(new StoreCompressedConstantOp(kind, storeAddress, c, state));
+            if (canStoreConstant(c, isCompressed)) {
+                if (isCompressed) {
+                    if (c.getKind() == Kind.Object) {
+                        Constant value = c.isNull() ? c : compress(c, config.getOopEncoding());
+                        append(new StoreCompressedConstantOp(kind, storeAddress, value, state));
+                    } else if (c.getKind() == Kind.Long) {
+                        // It's always a good idea to directly store compressed constants since they
+                        // have to be materialized as 64 bits encoded otherwise.
+                        Constant value = compress(c, config.getKlassEncoding());
+                        append(new StoreCompressedConstantOp(kind, storeAddress, value, state));
+                    } else {
+                        throw GraalInternalError.shouldNotReachHere("can't handle: " + access);
+                    }
+                    return;
                 } else {
                     append(new StoreConstantOp(kind, storeAddress, c, state));
+                    return;
                 }
-                return;
             }
         }
         Variable input = load(inputVal);
-        if (isCompressCandidate(access)) {
-            if (config.useCompressedOops && kind == Kind.Object) {
+        if (isCompressed) {
+            if (kind == Kind.Object) {
                 if (input.getKind() == Kind.Object) {
                     Variable scratch = newVariable(Kind.Long);
                     Register heapBaseReg = getProviders().getRegisters().getHeapBaseRegister();
-                    append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, getNarrowKlassBase(), getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment(), heapBaseReg));
+                    append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, config.getOopEncoding(), heapBaseReg));
                 } else {
                     // the input oop is already compressed
                     append(new StoreOp(input.getKind(), storeAddress, input, state));
                 }
-            } else if (config.useCompressedClassPointers && kind == Kind.Long) {
+            } else if (kind == Kind.Long) {
                 Variable scratch = newVariable(Kind.Long);
                 Register heapBaseReg = getProviders().getRegisters().getHeapBaseRegister();
-                append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, getNarrowKlassBase(), getNarrowOopBase(), getNarrowKlassShift(), getLogKlassAlignment(), heapBaseReg));
+                append(new StoreCompressedPointer(kind, storeAddress, input, scratch, state, config.getKlassEncoding(), heapBaseReg));
             } else {
                 append(new StoreOp(kind, storeAddress, input, state));
             }
         } else {
             append(new StoreOp(kind, storeAddress, input, state));
         }
-    }
-
-    private int getLogMinObjectAlignment() {
-        return config.logMinObjAlignment();
-    }
-
-    private int getNarrowOopShift() {
-        return config.narrowOopShift;
-    }
-
-    private long getNarrowOopBase() {
-        return config.narrowOopBase;
-    }
-
-    private int getLogKlassAlignment() {
-        return config.logKlassAlignment;
-    }
-
-    private int getNarrowKlassShift() {
-        return config.narrowKlassShift;
-    }
-
-    private long getNarrowKlassBase() {
-        return config.narrowKlassBase;
     }
 
     @Override
@@ -557,7 +576,7 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
         if (config.useCompressedOops && node.isCompressible()) {
             Variable scratch = newVariable(Kind.Long);
             Register heapBaseReg = getProviders().getRegisters().getHeapBaseRegister();
-            append(new CompareAndSwapCompressedOp(raxRes, addressValue, raxRes, newValue, scratch, getNarrowOopBase(), getNarrowOopShift(), getLogMinObjectAlignment(), heapBaseReg));
+            append(new CompareAndSwapCompressedOp(raxRes, addressValue, raxRes, newValue, scratch, config.getOopEncoding(), heapBaseReg));
         } else {
             append(new CompareAndSwapOp(raxRes, addressValue, raxRes, newValue));
         }
@@ -573,5 +592,10 @@ public class AMD64HotSpotLIRGenerator extends AMD64LIRGenerator implements HotSp
         } else {
             super.visitInfopointNode(i);
         }
+    }
+
+    public void emitPrefetchAllocate(ValueNode address, ValueNode distance) {
+        AMD64AddressValue addr = emitAddress(operand(address), 0, loadNonConst(operand(distance)), 1);
+        append(new AMD64PrefetchOp(addr, config.allocatePrefetchInstr));
     }
 }

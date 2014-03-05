@@ -23,6 +23,7 @@
 package com.oracle.graal.truffle;
 
 import static com.oracle.graal.api.code.CodeUtil.*;
+import static com.oracle.graal.compiler.GraalCompiler.*;
 import static com.oracle.graal.truffle.TruffleCompilerOptions.*;
 
 import java.lang.reflect.*;
@@ -32,14 +33,15 @@ import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.code.CallingConvention.Type;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.runtime.*;
-import com.oracle.graal.compiler.*;
 import com.oracle.graal.compiler.target.*;
+import com.oracle.graal.debug.*;
+import com.oracle.graal.debug.Debug.Scope;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.java.*;
+import com.oracle.graal.lir.asm.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.*;
-import com.oracle.graal.phases.PhasePlan.PhasePosition;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
 import com.oracle.graal.phases.util.*;
@@ -71,19 +73,19 @@ public final class GraalTruffleRuntime implements TruffleRuntime {
         return "Graal Truffle Runtime";
     }
 
-    public CallTarget createCallTarget(RootNode rootNode) {
-        return createCallTarget(rootNode, new FrameDescriptor());
-    }
-
-    @Override
-    public CallTarget createCallTarget(RootNode rootNode, FrameDescriptor frameDescriptor) {
-        if (!acceptForCompilation(rootNode)) {
-            return new DefaultCallTarget(rootNode, frameDescriptor);
-        }
+    public RootCallTarget createCallTarget(RootNode rootNode) {
         if (truffleCompiler == null) {
             truffleCompiler = new TruffleCompilerImpl();
         }
-        return new OptimizedCallTarget(rootNode, frameDescriptor, truffleCompiler, TruffleMinInvokeThreshold.getValue(), TruffleCompilationThreshold.getValue());
+        return new OptimizedCallTarget(rootNode, truffleCompiler, TruffleMinInvokeThreshold.getValue(), TruffleCompilationThreshold.getValue(), acceptForCompilation(rootNode));
+    }
+
+    public CallNode createCallNode(CallTarget target) {
+        if (target instanceof OptimizedCallTarget) {
+            return OptimizedCallNode.create((OptimizedCallTarget) target);
+        } else {
+            return new DefaultCallNode(target);
+        }
     }
 
     @Override
@@ -160,8 +162,12 @@ public final class GraalTruffleRuntime implements TruffleRuntime {
     public static void installOptimizedCallTargetCallMethod() {
         Providers providers = getGraalProviders();
         MetaAccessProvider metaAccess = providers.getMetaAccess();
+        CodeCacheProvider codeCache = providers.getCodeCache();
         ResolvedJavaMethod resolvedCallMethod = metaAccess.lookupJavaMethod(getCallMethod());
-        providers.getCodeCache().setDefaultMethod(resolvedCallMethod, compileMethod(resolvedCallMethod));
+        CompilationResult compResult = compileMethod(resolvedCallMethod);
+        try (Scope s = Debug.scope("CodeInstall", codeCache, resolvedCallMethod)) {
+            codeCache.setDefaultMethod(resolvedCallMethod, compResult);
+        }
     }
 
     private static Method getCallMethod() {
@@ -174,33 +180,31 @@ public final class GraalTruffleRuntime implements TruffleRuntime {
         return method;
     }
 
-    private static Backend instrumentBackend(Backend original) {
-        String arch = original.getTarget().arch.getName();
-
-        for (TruffleBackendFactory factory : ServiceLoader.loadInstalled(TruffleBackendFactory.class)) {
+    private static CompilationResultBuilderFactory getOptimizedCallTargetInstrumentationFactory(String arch, ResolvedJavaMethod method) {
+        for (OptimizedCallTargetInstrumentationFactory factory : ServiceLoader.loadInstalled(OptimizedCallTargetInstrumentationFactory.class)) {
             if (factory.getArchitecture().equals(arch)) {
-                return factory.createBackend(original);
+                factory.setInstrumentedMethod(method);
+                return factory;
             }
         }
-
-        return original;
+        // No specialization of OptimizedCallTarget on this platform.
+        return CompilationResultBuilderFactory.Default;
     }
 
     private static CompilationResult compileMethod(ResolvedJavaMethod javaMethod) {
         Providers providers = getGraalProviders();
         MetaAccessProvider metaAccess = providers.getMetaAccess();
-        Suites suites = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getSuites().createSuites();
+        SuitesProvider suitesProvider = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend().getSuites();
+        Suites suites = suitesProvider.createSuites();
         suites.getHighTier().findPhase(InliningPhase.class).remove();
         StructuredGraph graph = new StructuredGraph(javaMethod);
-        ForeignCallsProvider foreignCalls = providers.getForeignCalls();
-        new GraphBuilderPhase(metaAccess, foreignCalls, GraphBuilderConfiguration.getEagerDefault(), OptimisticOptimizations.ALL).apply(graph);
-        PhasePlan phasePlan = new PhasePlan();
-        GraphBuilderPhase graphBuilderPhase = new GraphBuilderPhase(metaAccess, foreignCalls, GraphBuilderConfiguration.getDefault(), OptimisticOptimizations.ALL);
-        phasePlan.addPhase(PhasePosition.AFTER_PARSING, graphBuilderPhase);
+        new GraphBuilderPhase.Instance(metaAccess, GraphBuilderConfiguration.getEagerDefault(), OptimisticOptimizations.ALL).apply(graph);
+        PhaseSuite<HighTierContext> graphBuilderSuite = suitesProvider.getDefaultGraphBuilderSuite();
         CallingConvention cc = getCallingConvention(providers.getCodeCache(), Type.JavaCallee, graph.method(), false);
         Backend backend = Graal.getRequiredCapability(RuntimeProvider.class).getHostBackend();
-        return GraalCompiler.compileGraph(graph, cc, javaMethod, providers, instrumentBackend(backend), providers.getCodeCache().getTarget(), null, phasePlan, OptimisticOptimizations.ALL,
-                        new SpeculationLog(), suites, new CompilationResult());
+        CompilationResultBuilderFactory factory = getOptimizedCallTargetInstrumentationFactory(backend.getTarget().arch.getName(), javaMethod);
+        return compileGraph(graph, cc, javaMethod, providers, backend, providers.getCodeCache().getTarget(), null, graphBuilderSuite, OptimisticOptimizations.ALL, getProfilingInfo(graph), null,
+                        suites, true, new CompilationResult(), factory);
     }
 
     private static Providers getGraalProviders() {

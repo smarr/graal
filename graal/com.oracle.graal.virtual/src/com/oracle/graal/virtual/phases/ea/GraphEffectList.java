@@ -28,6 +28,7 @@ import com.oracle.graal.graph.*;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.calc.*;
 import com.oracle.graal.nodes.debug.*;
+import com.oracle.graal.nodes.java.*;
 import com.oracle.graal.nodes.virtual.*;
 import com.oracle.graal.phases.common.*;
 
@@ -308,7 +309,7 @@ public class GraphEffectList extends EffectList {
      * @param otherAllocations A list of allocations that need to be added before the rest (used for
      *            boxing allocations).
      */
-    public void addMaterializationBefore(final FixedNode position, final List<AllocatedObjectNode> objects, final List<int[]> locks, final List<ValueNode> values,
+    public void addMaterializationBefore(final FixedNode position, final List<AllocatedObjectNode> objects, final List<List<MonitorIdNode>> locks, final List<ValueNode> values,
                     final List<ValueNode> otherAllocations) {
         add(new Effect() {
 
@@ -341,10 +342,12 @@ public class GraphEffectList extends EffectList {
                         obj.setCommit(commit);
                     }
                     commit.getValues().addAll(values);
-                    commit.getLocks().addAll(locks);
+                    for (List<MonitorIdNode> monitorIds : locks) {
+                        commit.addLocks(monitorIds);
+                    }
 
                     assert commit.usages().filter(AllocatedObjectNode.class).count() == commit.usages().count();
-                    HashSet<AllocatedObjectNode> materializedValues = new HashSet<>(commit.usages().filter(AllocatedObjectNode.class).snapshot());
+                    List<AllocatedObjectNode> materializedValues = commit.usages().filter(AllocatedObjectNode.class).snapshot();
                     for (int i = 0; i < commit.getValues().size(); i++) {
                         if (materializedValues.contains(commit.getValues().get(i))) {
                             commit.getValues().set(i, ((AllocatedObjectNode) commit.getValues().get(i)).getVirtualObject());

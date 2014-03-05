@@ -44,6 +44,7 @@ import com.oracle.graal.nodes.*;
  */
 public class JTTTest extends GraalCompilerTest {
 
+    protected static final Set<DeoptimizationReason> EMPTY = Collections.<DeoptimizationReason> emptySet();
     /**
      * The arguments which, if non-null, will replace the Locals in the test method's graph.
      */
@@ -62,10 +63,10 @@ public class JTTTest extends GraalCompilerTest {
             JavaType[] parameterTypes = signatureToTypes(getMetaAccess().lookupJavaMethod(m));
             assert parameterTypes.length == args.length;
             for (int i = 0; i < args.length; i++) {
-                LocalNode local = graph.getLocal(i);
+                ParameterNode param = graph.getParameter(i);
                 Constant c = Constant.forBoxed(parameterTypes[i].getKind(), args[i]);
                 ConstantNode replacement = ConstantNode.forConstant(c, getMetaAccess(), graph);
-                local.replaceAtUsages(replacement);
+                param.replaceAtUsages(replacement);
             }
         }
         return graph;
@@ -94,17 +95,29 @@ public class JTTTest extends GraalCompilerTest {
     }
 
     protected void runTest(String name, Object... args) {
-        runTest(Collections.<DeoptimizationReason> emptySet(), name, args);
+        runTest(EMPTY, name, args);
     }
 
     protected void runTest(Set<DeoptimizationReason> shouldNotDeopt, String name, Object... args) {
+        runTest(shouldNotDeopt, true, false, name, args);
+    }
+
+    protected void runTest(Set<DeoptimizationReason> shouldNotDeopt, boolean bind, boolean noProfile, String name, Object... args) {
         Method method = getMethod(name);
         Object receiver = Modifier.isStatic(method.getModifiers()) ? null : this;
 
         Result expect = executeExpected(method, receiver, args);
 
+        if (noProfile) {
+            getMetaAccess().lookupJavaMethod(method).reprofile();
+        }
+
         testAgainstExpected(method, expect, shouldNotDeopt, receiver, args);
-        if (args.length > 0) {
+        if (args.length > 0 && bind) {
+            if (noProfile) {
+                getMetaAccess().lookupJavaMethod(method).reprofile();
+            }
+
             this.argsToBind = args;
             testAgainstExpected(method, expect, shouldNotDeopt, receiver, args);
             this.argsToBind = null;

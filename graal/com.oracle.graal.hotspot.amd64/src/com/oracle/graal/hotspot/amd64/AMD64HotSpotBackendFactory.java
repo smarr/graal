@@ -37,7 +37,52 @@ import com.oracle.graal.phases.util.*;
 public class AMD64HotSpotBackendFactory implements HotSpotBackendFactory {
 
     protected Architecture createArchitecture(HotSpotVMConfig config) {
-        return new AMD64(config.useSSE, config.useAVX);
+        return new AMD64(computeFeatures(config));
+    }
+
+    protected EnumSet<AMD64.CPUFeature> computeFeatures(HotSpotVMConfig config) {
+        // Configure the feature set using the HotSpot flag settings.
+        EnumSet<AMD64.CPUFeature> features = EnumSet.noneOf(AMD64.CPUFeature.class);
+        assert config.useSSE >= 2 : "minimum config for x64";
+        features.add(AMD64.CPUFeature.SSE);
+        features.add(AMD64.CPUFeature.SSE2);
+        if ((config.x86CPUFeatures & config.cpuSSE3) != 0) {
+            features.add(AMD64.CPUFeature.SSE3);
+        }
+        if ((config.x86CPUFeatures & config.cpuSSSE3) != 0) {
+            features.add(AMD64.CPUFeature.SSSE3);
+        }
+        if ((config.x86CPUFeatures & config.cpuSSE4A) != 0) {
+            features.add(AMD64.CPUFeature.SSE4a);
+        }
+        if ((config.x86CPUFeatures & config.cpuSSE41) != 0) {
+            features.add(AMD64.CPUFeature.SSE4_1);
+        }
+        if ((config.x86CPUFeatures & config.cpuSSE42) != 0) {
+            features.add(AMD64.CPUFeature.SSE4_2);
+        }
+        if ((config.x86CPUFeatures & config.cpuAVX) != 0) {
+            features.add(AMD64.CPUFeature.AVX);
+        }
+        if ((config.x86CPUFeatures & config.cpuAVX2) != 0) {
+            features.add(AMD64.CPUFeature.AVX2);
+        }
+        if ((config.x86CPUFeatures & config.cpuERMS) != 0) {
+            features.add(AMD64.CPUFeature.ERMS);
+        }
+        if ((config.x86CPUFeatures & config.cpuLZCNT) != 0) {
+            features.add(AMD64.CPUFeature.LZCNT);
+        }
+        if ((config.x86CPUFeatures & config.cpuPOPCNT) != 0) {
+            features.add(AMD64.CPUFeature.POPCNT);
+        }
+        if ((config.x86CPUFeatures & config.cpuAES) != 0) {
+            features.add(AMD64.CPUFeature.AES);
+        }
+        if ((config.x86CPUFeatures & config.cpu3DNOWPREFETCH) != 0) {
+            features.add(AMD64.CPUFeature.AMD_3DNOW_PREFETCH);
+        }
+        return features;
     }
 
     protected TargetDescription createTarget(HotSpotVMConfig config) {

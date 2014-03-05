@@ -23,8 +23,6 @@
 
 package com.oracle.graal.hotspot.bridge;
 
-import java.lang.reflect.*;
-
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
@@ -45,9 +43,7 @@ public interface CompilerToVM {
      */
     byte[] initializeBytecode(long metaspaceMethod, byte[] code);
 
-    String getSignature(long metaspaceMethod);
-
-    ExceptionHandler[] initializeExceptionHandlers(long metaspaceMethod, ExceptionHandler[] handlers);
+    long exceptionTableStart(long metaspaceMethod);
 
     /**
      * Determines if a given metaspace Method object has balanced monitors.
@@ -58,39 +54,47 @@ public interface CompilerToVM {
     boolean hasBalancedMonitors(long metaspaceMethod);
 
     /**
-     * Determines if a given metaspace Method object is compilable. A method may not be compilable
-     * for a number of reasons such as:
+     * Determines if a given metaspace Method can be inlined. A method may not be inlinable for a
+     * number of reasons such as:
      * <ul>
-     * <li>a CompileOracle directive may prevent compilation of methods</li>
+     * <li>a CompileOracle directive may prevent inlining or compilation of this methods</li>
      * <li>the method may have a bytecode breakpoint set</li>
      * <li>the method may have other bytecode features that require special handling by the VM</li>
      * </ul>
      * 
-     * A non-compilable method should not be inlined.
+     * @param metaspaceMethod the metaspace Method object to query
+     * @return true if the method can be inlined
+     */
+    boolean canInlineMethod(long metaspaceMethod);
+
+    /**
+     * Determines if a given metaspace Method should be inlined at any cost. This could be because:
+     * <ul>
+     * <li>a CompileOracle directive may forces inlining of this methods</li>
+     * <li>an annotation forces inlining of this method</li>
+     * </ul>
      * 
      * @param metaspaceMethod the metaspace Method object to query
-     * @return true if the method is compilable
+     * @return true if the method should be inlined
      */
-    boolean isMethodCompilable(long metaspaceMethod);
+    boolean shouldInlineMethod(long metaspaceMethod);
 
     /**
      * Used to implement {@link ResolvedJavaType#findUniqueConcreteMethod(ResolvedJavaMethod)}.
      * 
      * @param metaspaceMethod the metaspace Method on which to based the search
-     * @param resultHolder the holder of the result is put in element 0 of this array
      * @return the metaspace Method result or 0 is there is no unique concrete method for
      *         {@code metaspaceMethod}
      */
-    long getUniqueConcreteMethod(long metaspaceMethod, HotSpotResolvedObjectType[] resultHolder);
+    long findUniqueConcreteMethod(long metaspaceMethod);
 
     /**
-     * Used to determine if an interface has exactly one implementor.
+     * Returns the implementor for the given interface class.
      * 
-     * @param interfaceType interface for which the implementor should be returned
-     * @return the unique implementor of the interface or null if the interface has 0 or more than 1
-     *         implementor
+     * @param metaspaceKlass the metaspace klass to get the implementor for
+     * @return the implementor as metaspace klass pointer or null if there is no implementor
      */
-    ResolvedJavaType getUniqueImplementor(HotSpotResolvedObjectType interfaceType);
+    long getKlassImplementor(long metaspaceKlass);
 
     /**
      * Initializes a {@link HotSpotResolvedJavaMethod} object from a metaspace Method object.
@@ -101,37 +105,28 @@ public interface CompilerToVM {
     void initializeMethod(long metaspaceMethod, HotSpotResolvedJavaMethod method);
 
     /**
-     * Initializes a {@link HotSpotMethodData} object from a metaspace MethodData object.
-     * 
-     * @param metaspaceMethodData the metaspace MethodData object
-     * @param methodData the object to initialize from the metaspace object
-     */
-    void initializeMethodData(long metaspaceMethodData, HotSpotMethodData methodData);
-
-    /**
-     * Converts a name to a Java type.
+     * Converts a name to a metaspace klass.
      * 
      * @param name a well formed Java type in {@linkplain JavaType#getName() internal} format
      * @param accessingClass the context of resolution (may be null)
      * @param eagerResolve force resolution to a {@link ResolvedJavaType}. If true, this method will
      *            either return a {@link ResolvedJavaType} or throw an exception
-     * @return a Java type for {@code name} which is guaranteed to be of type
-     *         {@link ResolvedJavaType} if {@code eagerResolve == true}
+     * @return a metaspace klass for {@code name}
      * @throws LinkageError if {@code eagerResolve == true} and the resolution failed
      */
-    JavaType lookupType(String name, HotSpotResolvedObjectType accessingClass, boolean eagerResolve);
+    long lookupType(String name, Class<?> accessingClass, boolean eagerResolve);
 
-    Object lookupConstantInPool(HotSpotResolvedObjectType pool, int cpi);
+    Object lookupConstantInPool(long metaspaceConstantPool, int cpi);
 
-    JavaMethod lookupMethodInPool(HotSpotResolvedObjectType pool, int cpi, byte opcode);
+    JavaMethod lookupMethodInPool(long metaspaceConstantPool, int cpi, byte opcode);
 
-    JavaType lookupTypeInPool(HotSpotResolvedObjectType pool, int cpi);
+    JavaType lookupTypeInPool(long metaspaceConstantPool, int cpi);
 
-    JavaField lookupFieldInPool(HotSpotResolvedObjectType pool, int cpi, byte opcode);
+    JavaField lookupFieldInPool(long metaspaceConstantPool, int cpi, byte opcode);
 
-    void lookupReferencedTypeInPool(HotSpotResolvedObjectType pool, int cpi, byte opcode);
+    void lookupReferencedTypeInPool(long metaspaceConstantPool, int cpi, byte opcode);
 
-    Object lookupAppendixInPool(HotSpotResolvedObjectType pool, int cpi, byte opcode);
+    Object lookupAppendixInPool(long metaspaceConstantPool, int cpi, byte opcode);
 
     public enum CodeInstallResult {
         OK("ok"), DEPENDENCIES_FAILED("dependencies failed"), CACHE_FULL("code cache is full"), CODE_TOO_LARGE("code is too large");
@@ -185,7 +180,7 @@ public interface CompilerToVM {
      * @param code the details of the installed CodeBlob are written to this object
      * @return the outcome of the installation as a {@link CodeInstallResult}.
      */
-    CodeInstallResult installCode(HotSpotCompiledCode compiledCode, HotSpotInstalledCode code, SpeculationLog cache);
+    CodeInstallResult installCode(HotSpotCompiledCode compiledCode, HotSpotInstalledCode code, SpeculationLog speculationLog);
 
     /**
      * Notifies the VM of statistics for a completed compilation.
@@ -201,21 +196,15 @@ public interface CompilerToVM {
      */
     void notifyCompilationStatistics(int id, HotSpotResolvedJavaMethod method, boolean osr, int processedBytecodes, long time, long timeUnitsPerSecond, HotSpotInstalledCode installedCode);
 
+    void printCompilationStatistics(boolean perCompiler, boolean aggregate);
+
     void resetCompilationStatistics();
 
     void initializeConfiguration(HotSpotVMConfig config);
 
-    JavaMethod resolveMethod(HotSpotResolvedObjectType klass, String name, String signature);
+    long resolveMethod(HotSpotResolvedObjectType klass, String name, String signature);
 
-    boolean isTypeInitialized(HotSpotResolvedObjectType klass);
-
-    void initializeType(HotSpotResolvedObjectType klass);
-
-    ResolvedJavaType getResolvedType(Class<?> javaClass);
-
-    HotSpotResolvedJavaField[] getInstanceFields(HotSpotResolvedObjectType klass);
-
-    HotSpotResolvedJavaMethod[] getMethods(HotSpotResolvedObjectType klass);
+    long getClassInitializer(HotSpotResolvedObjectType klass);
 
     boolean hasFinalizableSubclass(HotSpotResolvedObjectType klass);
 
@@ -228,17 +217,14 @@ public interface CompilerToVM {
     int getCompiledCodeSize(long metaspaceMethod);
 
     /**
-     * Gets the metaspace Method object corresponding to a given reflection {@link Method} object.
+     * Gets the metaspace Method object corresponding to a given {@link Class} object and slot
+     * number.
      * 
-     * @param reflectionMethod
-     * @param resultHolder the holder of the result is put in element 0 of this array
-     * @return the metaspace Method result for {@code reflectionMethod}
+     * @param holder method holder
+     * @param slot slot number of the method
+     * @return the metaspace Method
      */
-    long getMetaspaceMethod(Method reflectionMethod, HotSpotResolvedObjectType[] resultHolder);
-
-    long getMetaspaceConstructor(Constructor reflectionConstructor, HotSpotResolvedObjectType[] resultHolder);
-
-    HotSpotResolvedJavaField getJavaField(Field reflectionField);
+    long getMetaspaceMethod(Class<?> holder, int slot);
 
     long getMaxCallTargetOffset(long address);
 
@@ -254,7 +240,9 @@ public interface CompilerToVM {
 
     long[] getLineNumberTable(HotSpotResolvedJavaMethod method);
 
-    Local[] getLocalVariableTable(HotSpotResolvedJavaMethod method);
+    long getLocalVariableTableStart(HotSpotResolvedJavaMethod method);
+
+    int getLocalVariableTableLength(HotSpotResolvedJavaMethod method);
 
     String getFileName(HotSpotResolvedJavaType method);
 
@@ -273,10 +261,22 @@ public interface CompilerToVM {
 
     void invalidateInstalledCode(HotSpotInstalledCode hotspotInstalledCode);
 
-    boolean isTypeLinked(HotSpotResolvedObjectType hotSpotResolvedObjectType);
-
     /**
      * Collects the current values of all Graal benchmark counters, summed up over all threads.
      */
     long[] collectCounters();
+
+    boolean isMature(long metaspaceMethodData);
+
+    /**
+     * Generate a unique id to identify the result of the compile.
+     */
+    int allocateCompileId(HotSpotResolvedJavaMethod method, int entryBCI);
+
+    /**
+     * Gets the names of the supported GPU architectures.
+     * 
+     * @return a comma separated list of names
+     */
+    String getGPUs();
 }

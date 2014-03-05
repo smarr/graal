@@ -22,18 +22,27 @@
  */
 package com.oracle.graal.hotspot.ptx;
 
+import static com.oracle.graal.api.code.CodeUtil.*;
+import static com.oracle.graal.api.meta.LocationIdentity.*;
+import static com.oracle.graal.compiler.GraalCompiler.*;
+import static com.oracle.graal.hotspot.HotSpotForeignCallLinkage.Transition.*;
+import static com.oracle.graal.hotspot.meta.HotSpotForeignCallsProviderImpl.*;
 import static com.oracle.graal.lir.LIRValueUtil.*;
 
 import java.util.*;
 
 import com.oracle.graal.api.code.*;
+import com.oracle.graal.api.code.CallingConvention.Type;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.asm.*;
 import com.oracle.graal.asm.ptx.*;
 import com.oracle.graal.compiler.gen.*;
 import com.oracle.graal.compiler.ptx.*;
+import com.oracle.graal.debug.*;
+import com.oracle.graal.debug.Debug.Scope;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.hotspot.*;
+import com.oracle.graal.hotspot.HotSpotReplacementsImpl.GraphProducer;
 import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.lir.*;
 import com.oracle.graal.lir.LIRInstruction.OperandFlag;
@@ -42,27 +51,200 @@ import com.oracle.graal.lir.LIRInstruction.ValueProcedure;
 import com.oracle.graal.lir.StandardOp.LabelOp;
 import com.oracle.graal.lir.asm.*;
 import com.oracle.graal.lir.ptx.*;
+import com.oracle.graal.lir.ptx.PTXMemOp.LoadReturnAddrOp;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.cfg.*;
-import com.oracle.graal.lir.ptx.PTXMemOp.LoadReturnAddrOp;
+import com.oracle.graal.phases.*;
+import com.oracle.graal.phases.common.*;
+import com.oracle.graal.phases.tiers.*;
+import com.oracle.graal.word.*;
 
 /**
  * HotSpot PTX specific backend.
  */
 public class PTXHotSpotBackend extends HotSpotBackend {
 
+    private final boolean deviceInitialized;
+
+    /**
+     * Descriptor for the PTX runtime method for calling a kernel. The C++ signature is:
+     * 
+     * <pre>
+     *     jlong (JavaThread* thread,
+     *            jlong kernel,
+     *            jint dimX,
+     *            jint dimY,
+     *            jint dimZ,
+     *            jlong parametersAndReturnValueBuffer,
+     *            jint parametersAndReturnValueBufferSize,
+     *            jint objectParametersCount,
+     *            jlong objectParametersOffsets,
+     *            jlong pinnedObjects,
+     *            jint encodedReturnTypeSize)
+     * </pre>
+     */
+    // @formatter:off
+    public static final ForeignCallDescriptor CALL_KERNEL = new ForeignCallDescriptor("execute_kernel_from_vm", long.class,
+                    Word.class, // thread
+                    long.class, // kernel
+                    int.class,  // dimX
+                    int.class,  // dimY
+                    int.class,  // dimZ
+                    long.class, // parametersAndReturnValueBuffer
+                    int.class,  // parametersAndReturnValueBufferSize
+                    int.class,  // objectParameterCount
+                    long.class, // objectParameterOffsets
+                    long.class, // pinnedObjects
+                    int.class); // encodedReturnTypeSize
+    // @formatter:on
+
     public PTXHotSpotBackend(HotSpotGraalRuntime runtime, HotSpotProviders providers) {
         super(runtime, providers);
+        if (OmitDeviceInit) {
+            deviceInitialized = true;
+        } else {
+            boolean init = false;
+            try {
+                init = initialize();
+            } catch (UnsatisfiedLinkError e) {
+            }
+            deviceInitialized = init;
+        }
     }
+
+    /**
+     * Initializes the GPU device.
+     * 
+     * @return whether or not initialization was successful
+     */
+    private static native boolean initialize();
 
     @Override
     public boolean shouldAllocateRegisters() {
         return false;
     }
 
+    /**
+     * Used to omit {@linkplain #initialize() device initialization}.
+     */
+    private static final boolean OmitDeviceInit = Boolean.getBoolean("graal.ptx.omitDeviceInit");
+
+    @Override
+    public void completeInitialization() {
+        HotSpotProviders hostProviders = getRuntime().getHostProviders();
+        HotSpotHostForeignCallsProvider hostForeignCalls = (HotSpotHostForeignCallsProvider) hostProviders.getForeignCalls();
+        if (deviceInitialized) {
+            long launchKernel = getLaunchKernelAddress();
+            hostForeignCalls.linkForeignCall(hostProviders, CALL_KERNEL, launchKernel, false, NOT_LEAF, NOT_REEXECUTABLE, ANY_LOCATION);
+        }
+        /* Add a shutdown hook to destroy CUDA context(s) */
+        Runtime.getRuntime().addShutdownHook(new Thread("PTXShutdown") {
+            @Override
+            public void run() {
+                destroyContext();
+            }
+        });
+        super.completeInitialization();
+    }
+
+    private static native void destroyContext();
+
+    /**
+     * Gets the address of {@code Ptx::execute_kernel_from_vm()}.
+     */
+    private static native long getLaunchKernelAddress();
+
     @Override
     public FrameMap newFrameMap() {
         return new PTXFrameMap(getCodeCache());
+    }
+
+    /**
+     * Determines if the GPU device (or simulator) is available and initialized.
+     */
+    public boolean isDeviceInitialized() {
+        return deviceInitialized;
+    }
+
+    @Override
+    public GraphProducer getGraphProducer() {
+        if (!deviceInitialized) {
+            // GPU could not be initialized so offload is disabled
+            return null;
+        }
+        return new GraphProducer() {
+
+            public StructuredGraph getGraphFor(ResolvedJavaMethod method) {
+                if (canOffloadToGPU(method)) {
+                    ExternalCompilationResult ptxCode = PTXHotSpotBackend.this.compileKernel(method, true);
+                    HotSpotNmethod installedPTXCode = PTXHotSpotBackend.this.installKernel(method, ptxCode);
+                    return new PTXWrapperBuilder(method, installedPTXCode, getRuntime().getHostBackend().getProviders()).getGraph();
+                }
+                return null;
+            }
+
+            private boolean canOffloadToGPU(ResolvedJavaMethod method) {
+                HotSpotVMConfig config = getRuntime().getConfig();
+                return config.gpuOffload && method.getName().contains("lambda$") & method.isSynthetic();
+            }
+        };
+    }
+
+    /**
+     * Compiles a given method to PTX code.
+     * 
+     * @param makeBinary specifies whether a GPU binary should also be generated for the PTX code.
+     *            If true, the returned value is guaranteed to have a non-zero
+     *            {@linkplain ExternalCompilationResult#getEntryPoint() entry point}.
+     * @return the PTX code compiled from {@code method}'s bytecode
+     */
+    public ExternalCompilationResult compileKernel(ResolvedJavaMethod method, boolean makeBinary) {
+        StructuredGraph graph = new StructuredGraph(method);
+        HotSpotProviders providers = getProviders();
+        CallingConvention cc = getCallingConvention(providers.getCodeCache(), Type.JavaCallee, method, false);
+        PhaseSuite<HighTierContext> graphBuilderSuite = providers.getSuites().getDefaultGraphBuilderSuite();
+        graphBuilderSuite.appendPhase(new NonNullParametersPhase());
+        Suites suites = providers.getSuites().getDefaultSuites();
+        ExternalCompilationResult ptxCode = compileGraph(graph, cc, method, providers, this, this.getTarget(), null, graphBuilderSuite, OptimisticOptimizations.NONE, getProfilingInfo(graph), null,
+                        suites, true, new ExternalCompilationResult(), CompilationResultBuilderFactory.Default);
+        if (makeBinary) {
+            try (Scope ds = Debug.scope("GeneratingKernelBinary")) {
+                assert ptxCode.getTargetCode() != null;
+                long kernel = generateKernel(ptxCode.getTargetCode(), method.getName());
+                ptxCode.setEntryPoint(kernel);
+            } catch (Throwable e) {
+                throw Debug.handle(e);
+            }
+        }
+        return ptxCode;
+    }
+
+    /**
+     * Generates a GPU binary from PTX code.
+     */
+    private static native long generateKernel(byte[] targetCode, String name);
+
+    /**
+     * A list of the {@linkplain #installKernel(ResolvedJavaMethod, ExternalCompilationResult)
+     * installed} kernels. This is required so that there is a strong reference to each installed
+     * kernel as long as it is {@linkplain HotSpotNmethod#isValid() valid}. The list is pruned of
+     * invalid kernels every time a new kernel is installed.
+     */
+    private List<HotSpotNmethod> installedKernels = new LinkedList<>();
+
+    public final HotSpotNmethod installKernel(ResolvedJavaMethod method, ExternalCompilationResult ptxCode) {
+        assert OmitDeviceInit || ptxCode.getEntryPoint() != 0L;
+        HotSpotNmethod kernel = getProviders().getCodeCache().addExternalMethod(method, ptxCode);
+        synchronized (installedKernels) {
+            for (Iterator<HotSpotNmethod> i = installedKernels.iterator(); i.hasNext();) {
+                HotSpotNmethod entry = i.next();
+                if (!entry.isValid()) {
+                    i.remove();
+                }
+            }
+            installedKernels.add(kernel);
+        }
+        return kernel;
     }
 
     static final class RegisterAnalysis extends ValueProcedure {
@@ -79,24 +261,24 @@ public class PTXHotSpotBackend extends HotSpotBackend {
 
         LIRInstruction op;
 
-        void emitDeclarations(Buffer codeBuffer) {
+        void emitDeclarations(Assembler asm) {
             for (Integer i : unsigned8) {
-                codeBuffer.emitString(".reg .u8 %r" + i.intValue() + ";");
+                asm.emitString(".reg .u8 %r" + i.intValue() + ";");
             }
             for (Integer i : signed32) {
-                codeBuffer.emitString(".reg .s32 %r" + i.intValue() + ";");
+                asm.emitString(".reg .s32 %r" + i.intValue() + ";");
             }
             for (Integer i : signed64) {
-                codeBuffer.emitString(".reg .s64 %r" + i.intValue() + ";");
+                asm.emitString(".reg .s64 %r" + i.intValue() + ";");
             }
             for (Integer i : unsigned64) {
-                codeBuffer.emitString(".reg .u64 %r" + i.intValue() + ";");
+                asm.emitString(".reg .u64 %r" + i.intValue() + ";");
             }
             for (Integer i : float32) {
-                codeBuffer.emitString(".reg .f32 %r" + i.intValue() + ";");
+                asm.emitString(".reg .f32 %r" + i.intValue() + ";");
             }
             for (Integer i : float64) {
-                codeBuffer.emitString(".reg .f64 %r" + i.intValue() + ";");
+                asm.emitString(".reg .f64 %r" + i.intValue() + ";");
             }
         }
 
@@ -157,54 +339,58 @@ public class PTXHotSpotBackend extends HotSpotBackend {
     class PTXFrameContext implements FrameContext {
 
         @Override
-        public void enter(TargetMethodAssembler tasm) {
+        public void enter(CompilationResultBuilder crb) {
             // codeBuffer.emitString(".address_size 32"); // PTX ISA version 2.3
         }
 
         @Override
-        public void leave(TargetMethodAssembler tasm) {
+        public void leave(CompilationResultBuilder crb) {
+        }
+
+        public boolean hasFrame() {
+            return true;
         }
     }
 
     @Override
-    public TargetMethodAssembler newAssembler(LIRGenerator lirGen, CompilationResult compilationResult) {
+    public CompilationResultBuilder newCompilationResultBuilder(LIRGenerator lirGen, CompilationResult compilationResult, CompilationResultBuilderFactory factory) {
         // Omit the frame of the method:
         // - has no spill slots or other slots allocated during register allocation
         // - has no callee-saved registers
         // - has no incoming arguments passed on the stack
         // - has no instructions with debug info
         FrameMap frameMap = lirGen.frameMap;
-        AbstractAssembler masm = createAssembler(frameMap);
+        Assembler masm = createAssembler(frameMap);
         PTXFrameContext frameContext = new PTXFrameContext();
-        TargetMethodAssembler tasm = new PTXTargetMethodAssembler(getCodeCache(), getForeignCalls(), frameMap, masm, frameContext, compilationResult);
-        tasm.setFrameSize(0);
-        return tasm;
+        CompilationResultBuilder crb = factory.createBuilder(getCodeCache(), getForeignCalls(), frameMap, masm, frameContext, compilationResult);
+        crb.setFrameSize(0);
+        return crb;
     }
 
     @Override
-    protected AbstractAssembler createAssembler(FrameMap frameMap) {
+    protected Assembler createAssembler(FrameMap frameMap) {
         return new PTXMacroAssembler(getTarget(), frameMap.registerConfig);
     }
 
     @Override
     public LIRGenerator newLIRGenerator(StructuredGraph graph, FrameMap frameMap, CallingConvention cc, LIR lir) {
-        return new PTXLIRGenerator(graph, getProviders(), frameMap, cc, lir);
+        return new PTXHotSpotLIRGenerator(graph, getProviders(), getRuntime().getConfig(), frameMap, cc, lir);
     }
 
-    private static void emitKernelEntry(TargetMethodAssembler tasm, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
+    private static void emitKernelEntry(CompilationResultBuilder crb, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
         // Emit PTX kernel entry text based on PTXParameterOp
         // instructions in the start block. Remove the instructions
         // once kernel entry text and directives are emitted to
         // facilitate seemless PTX code generation subsequently.
         assert codeCacheOwner != null : lirGen.getGraph() + " is not associated with a method";
         final String name = codeCacheOwner.getName();
-        Buffer codeBuffer = tasm.asm.codeBuffer;
+        Assembler asm = crb.asm;
 
         // Emit initial boiler-plate directives.
-        codeBuffer.emitString(".version 3.0");
-        codeBuffer.emitString(".target sm_30");
-        codeBuffer.emitString0(".entry " + name + " (");
-        codeBuffer.emitString("");
+        asm.emitString(".version 3.0");
+        asm.emitString(".target sm_30");
+        asm.emitString0(".entry " + name + " (");
+        asm.emitString("");
 
         // Get the start block
         Block startBlock = lirGen.lir.cfg.getStartBlock();
@@ -216,7 +402,7 @@ public class PTXHotSpotBackend extends HotSpotBackend {
         // instruction.
         for (LIRInstruction op : lirGen.lir.lir(startBlock)) {
             if (op instanceof PTXParameterOp) {
-                op.emitCode(tasm);
+                op.emitCode(crb);
                 deleteOps.add(op);
             }
         }
@@ -227,16 +413,15 @@ public class PTXHotSpotBackend extends HotSpotBackend {
         }
 
         // Start emiting body of the PTX kernel.
-        codeBuffer.emitString0(") {");
-        codeBuffer.emitString("");
+        asm.emitString0(") {");
+        asm.emitString("");
     }
 
     // Emit .reg space declarations
-    private static void emitRegisterDecl(TargetMethodAssembler tasm, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
+    private static void emitRegisterDecl(CompilationResultBuilder crb, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
 
         assert codeCacheOwner != null : lirGen.getGraph() + " is not associated with a method";
 
-        Buffer codeBuffer = tasm.asm.codeBuffer;
         RegisterAnalysis registerAnalysis = new RegisterAnalysis();
 
         for (Block b : lirGen.lir.codeEmittingOrder()) {
@@ -251,47 +436,60 @@ public class PTXHotSpotBackend extends HotSpotBackend {
             }
         }
 
-        registerAnalysis.emitDeclarations(codeBuffer);
+        Assembler asm = crb.asm;
+        registerAnalysis.emitDeclarations(asm);
 
         // emit predicate register declaration
         int maxPredRegNum = ((PTXLIRGenerator) lirGen).getNextPredRegNumber();
         if (maxPredRegNum > 0) {
-            codeBuffer.emitString(".reg .pred %p<" + maxPredRegNum + ">;");
+            asm.emitString(".reg .pred %p<" + maxPredRegNum + ">;");
         }
     }
 
     @Override
-    public void emitCode(TargetMethodAssembler tasm, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
+    public void emitCode(CompilationResultBuilder crb, LIRGenerator lirGen, ResolvedJavaMethod codeCacheOwner) {
         assert codeCacheOwner != null : lirGen.getGraph() + " is not associated with a method";
-        Buffer codeBuffer = tasm.asm.codeBuffer;
+        Assembler asm = crb.asm;
+
         // Emit the prologue
-        emitKernelEntry(tasm, lirGen, codeCacheOwner);
+        emitKernelEntry(crb, lirGen, codeCacheOwner);
 
         // Emit register declarations
         try {
-            emitRegisterDecl(tasm, lirGen, codeCacheOwner);
+            emitRegisterDecl(crb, lirGen, codeCacheOwner);
         } catch (GraalInternalError e) {
             e.printStackTrace();
             // TODO : Better error handling needs to be done once
             // all types of parameters are handled.
-            codeBuffer.setPosition(0);
-            codeBuffer.close(false);
+            asm.close(false);
             return;
         }
         // Emit code for the LIR
         try {
-            lirGen.lir.emitCode(tasm);
+            crb.emit(lirGen.lir);
         } catch (GraalInternalError e) {
             e.printStackTrace();
             // TODO : Better error handling needs to be done once
             // all types of parameters are handled.
-            codeBuffer.setPosition(0);
-            codeBuffer.close(false);
+            asm.close(false);
             return;
         }
 
         // Emit the epilogue
-        codeBuffer.emitString0("}");
-        codeBuffer.emitString("");
+        asm.emitString0("}");
+        asm.emitString("");
     }
+
+    /**
+     * Gets the total number of available CUDA cores.
+     */
+    public int getAvailableProcessors() {
+        if (!deviceInitialized) {
+            return 0;
+        }
+        return getAvailableProcessors0();
+    }
+
+    private static native int getAvailableProcessors0();
+
 }

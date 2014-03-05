@@ -55,7 +55,7 @@ public class NodeClassSubstitutions {
 
         @Override
         protected Constant evaluate(Constant param, MetaAccessProvider metaAccess) {
-            return param.isNull() || AOTCompilation.getValue() ? null : Constant.forObject(NodeClass.get((Class<?>) param.asObject()));
+            return param.isNull() || ImmutableCode.getValue() ? null : Constant.forObject(NodeClass.get((Class<?>) param.asObject()));
         }
     }
 
@@ -64,12 +64,12 @@ public class NodeClassSubstitutions {
 
     @MethodSubstitution
     private static Node getNode(Node node, long offset) {
-        return PiNode.piCast(UnsafeLoadNode.load(node, offset, Kind.Object, LocationIdentity.ANY_LOCATION), Node.class, false, false);
+        return PiNode.piCast(UnsafeLoadNode.load(node, offset, Kind.Object, LocationIdentity.ANY_LOCATION), Node.class);
     }
 
     @MethodSubstitution
     private static NodeList getNodeList(Node node, long offset) {
-        return PiNode.piCast(UnsafeLoadNode.load(node, offset, Kind.Object, LocationIdentity.ANY_LOCATION), NodeList.class, false, false);
+        return PiNode.piCast(UnsafeLoadNode.load(node, offset, Kind.Object, LocationIdentity.ANY_LOCATION), NodeList.class);
     }
 
     @MethodSubstitution

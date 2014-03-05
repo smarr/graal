@@ -123,7 +123,7 @@ public class GraphUtil {
     }
 
     public static void killWithUnusedFloatingInputs(Node node) {
-        if (node.recordsUsages() && !node.isExternal()) {
+        if (node.recordsUsages()) {
             List<Node> floatingInputs = node.inputs().filter(isFloatingNode()).snapshot();
             node.safeDelete();
 
@@ -135,6 +135,13 @@ public class GraphUtil {
         } else {
             assert node.inputs().isEmpty();
         }
+    }
+
+    public static void removeFixedWithUnusedInputs(FixedWithNextNode fixed) {
+        FixedNode next = fixed.next();
+        fixed.setNext(null);
+        fixed.replaceAtPredecessor(next);
+        killWithUnusedFloatingInputs(fixed);
     }
 
     public static void checkRedundantPhi(PhiNode phiNode) {
@@ -354,14 +361,14 @@ public class GraphUtil {
          * Process a node as part of this search.
          * 
          * @param node the next node encountered in the search
-         * @param worklist if non-null and {@code node} is not external, {@code node} will be added
-         *            to this list. Otherwise, {@code node} is treated as a candidate result.
+         * @param worklist if non-null, {@code node} will be added to this list. Otherwise,
+         *            {@code node} is treated as a candidate result.
          * @return true if the search should continue, false if a definitive {@link #result} has
          *         been found
          */
         private boolean process(ValueNode node, NodeWorkList worklist) {
             if (node.isAlive()) {
-                if (node.isExternal() || worklist == null) {
+                if (worklist == null) {
                     if (result == null) {
                         // Initial candidate result: continue search
                         result = node;

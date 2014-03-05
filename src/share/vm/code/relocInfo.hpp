@@ -210,6 +210,11 @@ class NativeMovConstReg;
 //   See [About Offsets] below.
 //   //%note reloc_2
 //
+// relocInfo::poll_[return_]type -- a safepoint poll
+//   Value:  none
+//   Instruction types: memory load or test
+//   Data:  none
+//
 // For example:
 //
 //   INSTRUCTIONS                        RELOC: TYPE    PREFIX DATA
@@ -1278,10 +1283,8 @@ class poll_Relocation : public Relocation {
   void     fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest);
 };
 
-class poll_return_Relocation : public Relocation {
-  bool          is_data()                      { return true; }
+class poll_return_Relocation : public poll_Relocation {
   relocInfo::relocType type() { return relocInfo::poll_return_type; }
-  void     fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest);
 };
 
 // We know all the xxx_Relocation classes, so now we can define these:

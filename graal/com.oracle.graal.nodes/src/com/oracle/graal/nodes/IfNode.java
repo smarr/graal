@@ -320,7 +320,10 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
 
     private static boolean valuesDistinct(ConstantReflectionProvider constantReflection, ValueNode a, ValueNode b) {
         if (a.isConstant() && b.isConstant()) {
-            return !constantReflection.constantEquals(a.asConstant(), b.asConstant());
+            Boolean equal = constantReflection.constantEquals(a.asConstant(), b.asConstant());
+            if (equal != null) {
+                return !equal.booleanValue();
+            }
         }
 
         Stamp stampA = a.stamp();
@@ -367,6 +370,29 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                     }
                 }
             }
+        }
+        if (trueSuccessor().next() instanceof ReturnNode && falseSuccessor().next() instanceof ReturnNode) {
+            ReturnNode trueEnd = (ReturnNode) trueSuccessor().next();
+            ReturnNode falseEnd = (ReturnNode) falseSuccessor().next();
+            ValueNode trueValue = trueEnd.result();
+            ValueNode falseValue = falseEnd.result();
+            ConditionalNode conditional = null;
+            if (trueValue != null) {
+                if (trueValue.kind() != falseValue.kind()) {
+                    return false;
+                }
+                if (trueValue.kind() != Kind.Int && trueValue.kind() != Kind.Long) {
+                    return false;
+                }
+                conditional = canonicalizeConditionalCascade(trueValue, falseValue);
+                if (conditional == null) {
+                    return false;
+                }
+            }
+            ReturnNode newReturn = graph().add(new ReturnNode(conditional));
+            replaceAtPredecessor(newReturn);
+            GraphUtil.killCFG(this);
+            return true;
         }
         return false;
     }

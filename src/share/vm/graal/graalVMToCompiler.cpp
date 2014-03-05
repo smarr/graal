@@ -111,15 +111,13 @@ void VMToCompiler::finalizeOptions(jboolean ciTime) {
   check_pending_exception("Error while calling finalizeOptions");
 }
 
-void VMToCompiler::compileMethod(Method* method, Handle holder, int entry_bci, jboolean blocking) {
+void VMToCompiler::compileMethod(Method* method, int entry_bci, jboolean blocking) {
   assert(method != NULL, "just checking");
-  assert(!holder.is_null(), "just checking");
   Thread* THREAD = Thread::current();
   JavaValue result(T_VOID);
   JavaCallArguments args;
   args.push_oop(instance());
   args.push_long((jlong) (address) method);
-  args.push_oop(holder());
   args.push_int(entry_bci);
   args.push_int(blocking);
   JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::compileMethod_name(), vmSymbols::compileMethod_signature(), &args, THREAD);
@@ -241,78 +239,12 @@ oop VMToCompiler::createUnresolvedJavaType(Handle name, TRAPS) {
   return (oop) result.get_jobject();
 }
 
-oop VMToCompiler::createResolvedJavaType(Klass* klass, Handle name, Handle simpleName, Handle java_mirror, jint sizeOrSpecies, TRAPS) {
-  assert(!name.is_null(), "just checking");
-  assert(!simpleName.is_null(), "just checking");
+oop VMToCompiler::createResolvedJavaType(Handle java_mirror, TRAPS) {
   JavaValue result(T_OBJECT);
   JavaCallArguments args;
   args.push_oop(instance());
-  args.push_long((jlong) (address) klass);
-  args.push_oop(name);
-  args.push_oop(simpleName);
   args.push_oop(java_mirror);
-  args.push_int(sizeOrSpecies);
   JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::createResolvedJavaType_name(), vmSymbols::createResolvedJavaType_signature(), &args, THREAD);
   check_pending_exception("Error while calling createResolvedJavaType");
   return (oop) result.get_jobject();
 }
-
-oop VMToCompiler::createConstant(Handle kind, jlong value, TRAPS) {
-  JavaValue result(T_OBJECT);
-  JavaCallArguments args;
-  args.push_oop(instance());
-  args.push_oop(kind());
-  args.push_long(value);
-  JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::createConstant_name(), vmSymbols::createConstant_signature(), &args, THREAD);
-  check_pending_exception("Error while calling createConstantFloat");
-  return (oop) result.get_jobject();
-
-}
-
-oop VMToCompiler::createConstantFloat(jfloat value, TRAPS) {
-  JavaValue result(T_OBJECT);
-  JavaCallArguments args;
-  args.push_oop(instance());
-  args.push_float(value);
-  JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::createConstantFloat_name(), vmSymbols::createConstantFloat_signature(), &args, THREAD);
-  check_pending_exception("Error while calling createConstantFloat");
-  return (oop) result.get_jobject();
-
-}
-
-oop VMToCompiler::createConstantDouble(jdouble value, TRAPS) {
-  JavaValue result(T_OBJECT);
-  JavaCallArguments args;
-  args.push_oop(instance());
-  args.push_double(value);
-  JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::createConstantDouble_name(), vmSymbols::createConstantDouble_signature(), &args, THREAD);
-  check_pending_exception("Error while calling createConstantDouble");
-  return (oop) result.get_jobject();
-}
-
-oop VMToCompiler::createConstantObject(Handle object, TRAPS) {
-  JavaValue result(T_OBJECT);
-  JavaCallArguments args;
-  KlassHandle klass = loadClass(vmSymbols::com_oracle_graal_api_meta_Constant());
-  JavaCalls::call_static(&result, klass(), vmSymbols::forObject_name(), vmSymbols::createConstantObject_signature(), object, THREAD);
-  check_pending_exception("Error while calling Constant.forObject");
-  return (oop) result.get_jobject();
-}
-
-oop VMToCompiler::createLocal(Handle name, Handle typeInfo, int bci_start, int bci_end, int slot, Handle holder, TRAPS) {
-  JavaValue result(T_OBJECT);
-  JavaCallArguments args;
-  args.push_oop(instance());
-  args.push_oop(name);
-  args.push_oop(typeInfo);
-  args.push_oop(holder);
-  args.push_int(bci_start);
-  args.push_int(bci_end);
-  args.push_int(slot);
-  JavaCalls::call_interface(&result, vmToCompilerKlass(), vmSymbols::createLocalImpl_name(), vmSymbols::createLocalImpl_signature(), &args, THREAD);
-  check_pending_exception("Error while calling createConstantFloat");
-  return (oop) result.get_jobject();
-
-}
-
-

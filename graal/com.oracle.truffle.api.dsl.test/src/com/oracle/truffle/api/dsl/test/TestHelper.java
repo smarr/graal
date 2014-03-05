@@ -24,11 +24,11 @@ package com.oracle.truffle.api.dsl.test;
 
 import static org.junit.Assert.*;
 
+import java.lang.reflect.*;
 import java.util.*;
 
 import com.oracle.truffle.api.*;
 import com.oracle.truffle.api.dsl.*;
-import com.oracle.truffle.api.dsl.test.NodeContainerTest.BuiltinNode;
 import com.oracle.truffle.api.dsl.test.TypeSystemTest.ArgumentNode;
 import com.oracle.truffle.api.dsl.test.TypeSystemTest.ChildrenNode;
 import com.oracle.truffle.api.dsl.test.TypeSystemTest.TestArguments;
@@ -52,7 +52,7 @@ class TestHelper {
         ArgumentNode[] argumentNodes = arguments(factory.getExecutionSignature().size());
 
         List<Object> argumentList = new ArrayList<>();
-        if (ChildrenNode.class.isAssignableFrom(factory.getNodeClass()) || BuiltinNode.class.isAssignableFrom(factory.getNodeClass())) {
+        if (ChildrenNode.class.isAssignableFrom(factory.getNodeClass())) {
             argumentList.add(argumentNodes);
         } else {
             argumentList.addAll(Arrays.asList(argumentNodes));
@@ -62,7 +62,17 @@ class TestHelper {
     }
 
     static <E extends ValueNode> E createGenericNode(NodeFactory<E> factory, Object... constants) {
-        return factory.createNodeGeneric(createNode(factory, constants));
+        Method createGenericMethod;
+        try {
+            createGenericMethod = factory.getClass().getMethod("createGeneric", factory.getNodeClass());
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
+        try {
+            return factory.getNodeClass().cast(createGenericMethod.invoke(null, createNode(factory, constants)));
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     static <E extends ValueNode> TestRootNode<E> createRoot(NodeFactory<E> factory, Object... constants) {

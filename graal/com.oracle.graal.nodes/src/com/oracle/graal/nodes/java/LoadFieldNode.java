@@ -60,6 +60,9 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
 
     @Override
     public Node canonical(CanonicalizerTool tool) {
+        if (usages().isEmpty() && !isVolatile() && (isStatic() || ObjectStamp.isObjectNonNull(object().stamp()))) {
+            return null;
+        }
         MetaAccessProvider metaAccess = tool.getMetaAccess();
         if (tool.canonicalizeReads() && metaAccess != null) {
             ConstantNode constant = asConstant(metaAccess);
@@ -70,6 +73,9 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
             if (phi != null) {
                 return phi;
             }
+        }
+        if (!isStatic() && object().isNullConstant()) {
+            return graph().add(new DeoptimizeNode(DeoptimizationAction.None, DeoptimizationReason.NullCheckException));
         }
         return this;
     }

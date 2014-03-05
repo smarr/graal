@@ -66,28 +66,43 @@ public final class HotSpotMethodData extends CompilerObject {
      */
     private final long metaspaceMethodData;
 
-    private int normalDataSize;
-    private int extraDataSize;
-
     HotSpotMethodData(long metaspaceMethodData) {
         this.metaspaceMethodData = metaspaceMethodData;
-        runtime().getCompilerToVM().initializeMethodData(metaspaceMethodData, this);
+    }
+
+    /**
+     * @return value of the MethodData::_data_size field
+     */
+    private int normalDataSize() {
+        return unsafe.getInt(metaspaceMethodData + config.methodDataDataSize);
+    }
+
+    /**
+     * Returns the size of the extra data records. This method does the same calculation as
+     * MethodData::extra_data_size().
+     * 
+     * @return size of extra data records
+     */
+    private int extraDataSize() {
+        final int extraDataBase = config.methodDataOopDataOffset + normalDataSize();
+        final int extraDataLimit = unsafe.getInt(metaspaceMethodData + config.methodDataSize);
+        return extraDataLimit - extraDataBase;
     }
 
     public boolean hasNormalData() {
-        return normalDataSize > 0;
+        return normalDataSize() > 0;
     }
 
     public boolean hasExtraData() {
-        return extraDataSize > 0;
+        return extraDataSize() > 0;
     }
 
     public int getExtraDataBeginOffset() {
-        return normalDataSize;
+        return normalDataSize();
     }
 
     public boolean isWithin(int position) {
-        return position >= 0 && position < normalDataSize + extraDataSize;
+        return position >= 0 && position < normalDataSize() + extraDataSize();
     }
 
     public int getDeoptimizationCount(DeoptimizationReason reason) {
@@ -95,8 +110,13 @@ public final class HotSpotMethodData extends CompilerObject {
         return unsafe.getByte(metaspaceMethodData + config.methodDataOopTrapHistoryOffset + reasonIndex) & 0xFF;
     }
 
+    public int getOSRDeoptimizationCount(DeoptimizationReason reason) {
+        int reasonIndex = runtime().getHostProviders().getMetaAccess().convertDeoptReason(reason);
+        return unsafe.getByte(metaspaceMethodData + config.methodDataOopTrapHistoryOffset + config.deoptReasonOSROffset + reasonIndex) & 0xFF;
+    }
+
     public HotSpotMethodDataAccessor getNormalData(int position) {
-        if (position >= normalDataSize) {
+        if (position >= normalDataSize()) {
             return null;
         }
 
@@ -106,7 +126,7 @@ public final class HotSpotMethodData extends CompilerObject {
     }
 
     public HotSpotMethodDataAccessor getExtraData(int position) {
-        if (position >= normalDataSize + extraDataSize) {
+        if (position >= normalDataSize() + extraDataSize()) {
             return null;
         }
         HotSpotMethodDataAccessor data = getData(position);
@@ -127,7 +147,7 @@ public final class HotSpotMethodData extends CompilerObject {
     private HotSpotMethodDataAccessor getData(int position) {
         assert position >= 0 : "out of bounds";
         int tag = AbstractMethodData.readTag(this, position);
-        assert tag >= 0 && tag < PROFILE_DATA_ACCESSORS.length : "illegal tag";
+        assert tag >= 0 && tag < PROFILE_DATA_ACCESSORS.length : "illegal tag " + tag;
         return PROFILE_DATA_ACCESSORS[tag];
     }
 
@@ -185,6 +205,14 @@ public final class HotSpotMethodData extends CompilerObject {
 
     private static int cellsToBytes(int cells) {
         return cells * config.dataLayoutCellSize;
+    }
+
+    /**
+     * Returns whether profiling ran long enough that the profile information is mature. Other
+     * informational data will still be valid even if the profile isn't mature.
+     */
+    public boolean isProfileMature() {
+        return runtime().getCompilerToVM().isMature(metaspaceMethodData);
     }
 
     @Override
@@ -377,7 +405,7 @@ public final class HotSpotMethodData extends CompilerObject {
 
         @Override
         public StringBuilder appendTo(StringBuilder sb, HotSpotMethodData data, int pos) {
-            return sb.append(format("count(%d)", getCounterValue(data, pos)));
+            return sb.append(format("count(%d) null_seen(%s) exception_seen(%s)", getCounterValue(data, pos), getNullSeen(data, pos), getExceptionSeen(data, pos)));
         }
     }
 
@@ -504,7 +532,9 @@ public final class HotSpotMethodData extends CompilerObject {
         public StringBuilder appendTo(StringBuilder sb, HotSpotMethodData data, int pos) {
             RawItemProfile<ResolvedJavaType> profile = getRawTypeProfile(data, pos);
             TriState nullSeen = getNullSeen(data, pos);
-            sb.append(format("count(%d) null_seen(%s) nonprofiled_count(%d) entries(%d)", getCounterValue(data, pos), nullSeen, getTypesNotRecordedExecutionCount(data, pos), profile.entries));
+            TriState exceptionSeen = getExceptionSeen(data, pos);
+            sb.append(format("count(%d) null_seen(%s) exception_seen(%s) nonprofiled_count(%d) entries(%d)", getCounterValue(data, pos), nullSeen, exceptionSeen,
+                            getTypesNotRecordedExecutionCount(data, pos), profile.entries));
             for (int i = 0; i < profile.entries; i++) {
                 long count = profile.counts[i];
                 sb.append(format("%n  %s (%d, %4.2f)", MetaUtil.toJavaName(profile.items[i]), count, (double) count / profile.totalCount));

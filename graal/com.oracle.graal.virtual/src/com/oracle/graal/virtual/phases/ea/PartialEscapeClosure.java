@@ -37,6 +37,7 @@ import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.nodes.spi.Virtualizable.EscapeState;
 import com.oracle.graal.nodes.virtual.*;
 import com.oracle.graal.phases.schedule.*;
+import com.oracle.graal.phases.util.*;
 import com.oracle.graal.virtual.nodes.*;
 
 public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockState<BlockT>> extends EffectsClosure<BlockT> {
@@ -130,19 +131,14 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
     }
 
     private void processNodeWithState(NodeWithState nodeWithState, final BlockT state, final GraphEffectList effects) {
-        FrameState stateAfter = nodeWithState.getState();
-        if (stateAfter != null) {
-            if (stateAfter.usages().count() > 1) {
-                if (nodeWithState instanceof StateSplit) {
-                    StateSplit split = (StateSplit) nodeWithState;
-                    stateAfter = (FrameState) stateAfter.copyWithInputs();
-                    split.setStateAfter(stateAfter);
-                } else {
-                    throw GraalInternalError.shouldNotReachHere();
-                }
+        FrameState frameState = nodeWithState.getState();
+        if (frameState != null) {
+            if (frameState.usages().count() > 1) {
+                nodeWithState.asNode().replaceFirstInput(frameState, frameState.copyWithInputs());
+                frameState = nodeWithState.getState();
             }
-            final HashSet<ObjectState> virtual = new HashSet<>();
-            stateAfter.applyToNonVirtual(new NodeClosure<ValueNode>() {
+            final Set<ObjectState> virtual = new ArraySet<>();
+            frameState.applyToNonVirtual(new NodeClosure<ValueNode>() {
 
                 @Override
                 public void apply(Node usage, ValueNode value) {
@@ -203,7 +199,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
                 } else {
                     v = new MaterializedObjectState(obj.virtual, obj.getMaterializedValue());
                 }
-                effects.addVirtualMapping(stateAfter, v);
+                effects.addVirtualMapping(frameState, v);
             }
         }
     }
@@ -616,7 +612,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
     }
 
     public ObjectState getObjectState(PartialEscapeBlockState<?> state, ValueNode value) {
-        if (value == null || value.isExternal()) {
+        if (value == null) {
             return null;
         }
         if (value.isAlive() && !aliases.isNew(value)) {

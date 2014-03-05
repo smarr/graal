@@ -24,17 +24,116 @@ package com.oracle.graal.api.meta;
 
 import static java.lang.reflect.Modifier.*;
 
+import java.io.*;
 import java.lang.annotation.*;
 import java.lang.reflect.*;
 import java.util.*;
 
-import com.oracle.graal.api.meta.ProfilingInfo.TriState;
+import com.oracle.graal.api.meta.ProfilingInfo.*;
 
 /**
  * Miscellaneous collection of utility methods used by {@code com.oracle.graal.api.meta} and its
  * clients.
  */
 public class MetaUtil {
+
+    private static class ClassInfo {
+        public long totalSize;
+        public long instanceCount;
+
+        @Override
+        public String toString() {
+            return "totalSize=" + totalSize + ", instanceCount=" + instanceCount;
+        }
+    }
+
+    /**
+     * Returns the number of bytes occupied by this constant value or constant object and
+     * recursively all values reachable from this value.
+     * 
+     * @param constant the constant whose bytes should be measured
+     * @param printTopN print total size and instance count of the top n classes is desired
+     * @return the number of bytes occupied by this constant
+     */
+    public static long getMemorySizeRecursive(MetaAccessProvider access, Constant constant, PrintStream out, int printTopN) {
+        IdentityHashMap<Object, Boolean> marked = new IdentityHashMap<>();
+        Stack<Constant> stack = new Stack<>();
+        if (constant.getKind() == Kind.Object && constant.isNonNull()) {
+            marked.put(constant.asObject(), Boolean.TRUE);
+        }
+        final HashMap<Class, ClassInfo> histogram = new HashMap<>();
+        stack.push(constant);
+        long sum = 0;
+        while (!stack.isEmpty()) {
+            Constant c = stack.pop();
+            long memorySize = access.getMemorySize(constant);
+            sum += memorySize;
+            if (c.getKind() == Kind.Object && c.isNonNull()) {
+                Class<?> clazz = c.asObject().getClass();
+                if (!histogram.containsKey(clazz)) {
+                    histogram.put(clazz, new ClassInfo());
+                }
+                ClassInfo info = histogram.get(clazz);
+                info.instanceCount++;
+                info.totalSize += memorySize;
+                ResolvedJavaType type = access.lookupJavaType(c);
+                if (type.isArray()) {
+                    if (!type.getComponentType().isPrimitive()) {
+                        Object[] array = (Object[]) c.asObject();
+                        for (Object value : array) {
+                            Constant forObject = Constant.forObject(value);
+                            pushConstant(marked, stack, forObject);
+                        }
+                    }
+                } else {
+                    ResolvedJavaField[] instanceFields = type.getInstanceFields(true);
+                    for (ResolvedJavaField f : instanceFields) {
+                        if (f.getKind() == Kind.Object) {
+                            Constant value = f.readValue(c);
+                            pushConstant(marked, stack, value);
+                        }
+                    }
+                }
+            }
+        }
+        ArrayList<Class> clazzes = new ArrayList<>();
+        clazzes.addAll(histogram.keySet());
+        Collections.sort(clazzes, new Comparator<Class>() {
+
+            @Override
+            public int compare(Class o1, Class o2) {
+                long l1 = histogram.get(o1).totalSize;
+                long l2 = histogram.get(o2).totalSize;
+                if (l1 > l2) {
+                    return -1;
+                } else if (l1 == l2) {
+                    return 0;
+                } else {
+                    return 1;
+                }
+            }
+        });
+
+        int z = 0;
+        for (Class c : clazzes) {
+            if (z > printTopN) {
+                break;
+            }
+            out.println("Class " + c + ", " + histogram.get(c));
+            ++z;
+        }
+
+        return sum;
+    }
+
+    private static void pushConstant(IdentityHashMap<Object, Boolean> marked, Stack<Constant> stack, Constant value) {
+        if (value.isNonNull()) {
+            if (!marked.containsKey(value.asObject())) {
+                marked.put(value.asObject(), Boolean.TRUE);
+                stack.push(value);
+            }
+        }
+    }
 
     /**
      * Returns true if the specified typed is exactly the type {@link java.lang.Object}.
@@ -536,11 +635,11 @@ public class MetaUtil {
                 buf.append(sep);
             }
 
-            if (info.getExceptionSeen(i) == TriState.TRUE) {
+            if (info.getExceptionSeen(i) != TriState.UNKNOWN) {
                 buf.append(String.format("exceptionSeen@%d: %s%s", i, info.getExceptionSeen(i).name(), sep));
             }
 
-            if (info.getNullSeen(i) == TriState.TRUE) {
+            if (info.getNullSeen(i) != TriState.UNKNOWN) {
                 buf.append(String.format("nullSeen@%d: %s%s", i, info.getNullSeen(i).name(), sep));
             }
 

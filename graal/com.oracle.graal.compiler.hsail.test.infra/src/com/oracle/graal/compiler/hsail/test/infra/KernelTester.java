@@ -108,17 +108,17 @@ public abstract class KernelTester {
 
     private static boolean gaveNoOkraWarning = false;
     private boolean onSimulator;
-    private boolean okraLibExists;
+    private final boolean okraLibExists;
 
     public boolean runningOnSimulator() {
         return onSimulator;
     }
 
-    public KernelTester() {
-        okraLibExists = OkraUtil.okraLibExists();
+    public KernelTester(boolean okraLibExists) {
         dispatchMode = DispatchMode.SEQ;
         hsailMode = HsailMode.COMPILED;
         useLambdaMethod = false;
+        this.okraLibExists = okraLibExists;
     }
 
     public abstract void runTest();
@@ -280,10 +280,13 @@ public abstract class KernelTester {
     }
 
     /**
-     * This isEqualsFP method allows subclass to override what FP equality means for this particular
-     * unit test.
+     * Tests two floating point values for equality.
      */
     public boolean isEqualsFP(double first, double second) {
+        // Special case for checking whether expected and actual values are both NaNs.
+        if (Double.isNaN(first) && Double.isNaN(second)) {
+            return true;
+        }
         return first == second;
     }
 

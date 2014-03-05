@@ -33,10 +33,11 @@ public class EAMergingTest extends EATestBase {
     @Test
     public void testSimpleMerge() {
         testEscapeAnalysis("simpleMergeSnippet", null, false);
-        assertTrue(returnNode.result() instanceof PhiNode);
-        PhiNode phi = (PhiNode) returnNode.result();
-        assertTrue(phi.valueAt(0) instanceof LocalNode);
-        assertTrue(phi.valueAt(1) instanceof LocalNode);
+        assertEquals(1, returnNodes.size());
+        assertTrue(returnNodes.get(0).result() instanceof PhiNode);
+        PhiNode phi = (PhiNode) returnNodes.get(0).result();
+        assertTrue(phi.valueAt(0) instanceof ParameterNode);
+        assertTrue(phi.valueAt(1) instanceof ParameterNode);
     }
 
     public static int simpleMergeSnippet(boolean b, int u, int v) {

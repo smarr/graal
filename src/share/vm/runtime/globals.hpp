@@ -3646,9 +3646,6 @@ class CommandLineFlags {
           "Temporary flag for transition to AbstractMethodError wrapped "   \
           "in InvocationTargetException. See 6531596")                      \
                                                                             \
-  develop(bool, VerifyLambdaBytecodes, false,                               \
-          "Force verification of jdk 8 lambda metafactory bytecodes")       \
-                                                                            \
   develop(intx, FastSuperclassLimit, 8,                                     \
           "Depth of hardwired instanceof accelerator array")                \
                                                                             \
@@ -3842,12 +3839,6 @@ class CommandLineFlags {
                                                                             \
   product(bool , AllowNonVirtualCalls, false,                               \
           "Obey the ACC_SUPER flag and allow invokenonvirtual calls")       \
-                                                                            \
-  product(bool, TraceGPUInteraction, false,                                 \
-          "Trace external GPU Interaction")                                 \
-                                                                            \
-  product(bool, UseHSAILSimulator, false,                                   \
-          "Run code on HSAIL Simulator")                                    \
                                                                             \
   diagnostic(ccstr, SharedArchiveFile, NULL,                                \
           "Override the default location of the CDS archive file")          \

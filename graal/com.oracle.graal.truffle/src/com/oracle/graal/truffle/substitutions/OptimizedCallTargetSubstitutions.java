@@ -34,9 +34,6 @@ import com.oracle.truffle.api.frame.*;
 public class OptimizedCallTargetSubstitutions {
 
     @MacroSubstitution(macro = NeverInlineMacroNode.class, isStatic = false)
-    public static native Object call(OptimizedCallTarget target, PackedFrame caller, Arguments args);
-
-    @MacroSubstitution(macro = NeverInlineMacroNode.class, isStatic = false)
     public static native Object callHelper(OptimizedCallTarget target, PackedFrame caller, Arguments args);
 
     @MacroSubstitution(macro = NeverInlineMacroNode.class, isStatic = false)
@@ -47,12 +44,6 @@ public class OptimizedCallTargetSubstitutions {
 
     @MethodSubstitution
     private static FrameWithoutBoxing createFrame(FrameDescriptor descriptor, PackedFrame caller, Arguments args) {
-        return NewFrameNode.allocate(descriptor, caller, args);
-    }
-
-    @SuppressWarnings("unused")
-    @MethodSubstitution(isStatic = false)
-    private static VirtualFrame create(OptimizedCallTarget target, FrameDescriptor descriptor, PackedFrame caller, Arguments args) {
-        return createFrame(descriptor, caller, args);
+        return NewFrameNode.allocate(FrameWithoutBoxing.class, descriptor, caller, args);
     }
 }

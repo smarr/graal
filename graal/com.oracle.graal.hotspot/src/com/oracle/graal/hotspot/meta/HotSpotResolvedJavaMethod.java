@@ -49,16 +49,17 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
     /**
      * Reference to metaspace Method object.
      */
-    final long metaspaceMethod;
+    private final long metaspaceMethod;
 
     private final HotSpotResolvedObjectType holder;
-    private/* final */int codeSize;
+    private final HotSpotConstantPool constantPool;
+    private final HotSpotSignature signature;
+    private final int codeSize;
     private/* final */int exceptionHandlerCount;
     private boolean callerSensitive;
     private boolean forceInline;
     private boolean dontInline;
     private boolean ignoredBySecurityStackWalk;
-    private HotSpotSignature signature;
     private Boolean hasBalancedMonitors;
     private Map<Object, Object> compilerStorage;
     private HotSpotMethodData methodData;
@@ -75,13 +76,10 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
      */
     public static HotSpotResolvedObjectType getHolder(long metaspaceMethod) {
         HotSpotVMConfig config = runtime().getConfig();
-        long constMethod = unsafe.getAddress(metaspaceMethod + config.methodConstMethodOffset);
-        assert constMethod != 0;
-        long constantPool = unsafe.getAddress(constMethod + config.constMethodConstantsOffset);
-        assert constantPool != 0;
-        long holder = unsafe.getAddress(constantPool + config.constantPoolHolderOffset);
-        assert holder != 0;
-        return (HotSpotResolvedObjectType) HotSpotResolvedObjectType.fromMetaspaceKlass(holder);
+        final long metaspaceConstMethod = unsafe.getAddress(metaspaceMethod + config.methodConstMethodOffset);
+        final long metaspaceConstantPool = unsafe.getAddress(metaspaceConstMethod + config.constMethodConstantsOffset);
+        final long metaspaceKlass = unsafe.getAddress(metaspaceConstantPool + config.constantPoolHolderOffset);
+        return (HotSpotResolvedObjectType) HotSpotResolvedObjectType.fromMetaspaceKlass(metaspaceKlass);
     }
 
     /**
@@ -96,18 +94,55 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
     }
 
     HotSpotResolvedJavaMethod(HotSpotResolvedObjectType holder, long metaspaceMethod) {
+        // It would be too much work to get the method name here so we fill it in later.
+        super(null);
         this.metaspaceMethod = metaspaceMethod;
         this.holder = holder;
+
+        HotSpotVMConfig config = runtime().getConfig();
+        final long constMethod = getConstMethod();
+
+        /*
+         * Get the constant pool from the metaspace method. Some methods (e.g. intrinsics for
+         * signature-polymorphic method handle methods) have their own constant pool instead of the
+         * one from their holder.
+         */
+        final long metaspaceConstantPool = unsafe.getAddress(constMethod + config.constMethodConstantsOffset);
+        this.constantPool = new HotSpotConstantPool(metaspaceConstantPool);
+
+        final int nameIndex = unsafe.getChar(constMethod + config.constMethodNameIndexOffset);
+        this.name = constantPool.lookupUtf8(nameIndex);
+
+        final int signatureIndex = unsafe.getChar(constMethod + config.constMethodSignatureIndexOffset);
+        this.signature = (HotSpotSignature) constantPool.lookupSignature(signatureIndex);
+        this.codeSize = unsafe.getChar(constMethod + config.constMethodCodeSizeOffset);
+
         runtime().getCompilerToVM().initializeMethod(metaspaceMethod, this);
+    }
+
+    /**
+     * Returns a pointer to this method's constant method data structure (
+     * {@code Method::_constMethod}).
+     * 
+     * @return pointer to this method's ConstMethod
+     */
+    private long getConstMethod() {
+        assert metaspaceMethod != 0;
+        return unsafe.getAddress(metaspaceMethod + runtime().getConfig().methodConstMethodOffset);
+    }
+
+    /**
+     * Returns this method's constant method flags ({@code ConstMethod::_flags}).
+     * 
+     * @return flags of this method's ConstMethod
+     */
+    private long getConstMethodFlags() {
+        return unsafe.getChar(getConstMethod() + runtime().getConfig().constMethodFlagsOffset);
     }
 
     @Override
     public ResolvedJavaType getDeclaringClass() {
         return holder;
-    }
-
-    public long getMetaspaceMethod() {
-        return metaspaceMethod;
     }
 
     /**
@@ -122,10 +157,18 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         return getMetaspaceMethodConstant();
     }
 
+    /**
+     * Gets the complete set of modifiers for this method which includes the JVM specification
+     * modifiers as well as the HotSpot internal modifiers.
+     */
+    public int getAllModifiers() {
+        HotSpotVMConfig config = runtime().getConfig();
+        return unsafe.getInt(metaspaceMethod + config.methodAccessFlagsOffset);
+    }
+
     @Override
     public int getModifiers() {
-        HotSpotVMConfig config = runtime().getConfig();
-        return unsafe.getInt(metaspaceMethod + config.methodAccessFlagsOffset) & Modifier.methodModifiers();
+        return getAllModifiers() & Modifier.methodModifiers();
     }
 
     @Override
@@ -139,7 +182,7 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         if (codeSize == 0) {
             return null;
         }
-        if (code == null && runtime().getCompilerToVM().isTypeLinked(holder)) {
+        if (code == null && holder.isLinked()) {
             code = runtime().getCompilerToVM().initializeBytecode(metaspaceMethod, new byte[codeSize]);
             assert code.length == codeSize : "expected: " + codeSize + ", actual: " + code.length;
         }
@@ -156,11 +199,40 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         if (exceptionHandlerCount == 0) {
             return new ExceptionHandler[0];
         }
+
         ExceptionHandler[] handlers = new ExceptionHandler[exceptionHandlerCount];
+        HotSpotVMConfig config = runtime().getConfig();
+        long exceptionTableElement = runtime().getCompilerToVM().exceptionTableStart(metaspaceMethod);
+
         for (int i = 0; i < exceptionHandlerCount; i++) {
-            handlers[i] = new ExceptionHandler(-1, -1, -1, -1, null);
+            final int startPc = unsafe.getChar(exceptionTableElement + config.exceptionTableElementStartPcOffset);
+            final int endPc = unsafe.getChar(exceptionTableElement + config.exceptionTableElementEndPcOffset);
+            final int handlerPc = unsafe.getChar(exceptionTableElement + config.exceptionTableElementHandlerPcOffset);
+            int catchTypeIndex = unsafe.getChar(exceptionTableElement + config.exceptionTableElementCatchTypeIndexOffset);
+
+            JavaType catchType;
+            if (catchTypeIndex == 0) {
+                catchType = null;
+            } else {
+                final int opcode = -1;  // opcode is not used
+                catchType = constantPool.lookupType(catchTypeIndex, opcode);
+
+                // Check for Throwable which catches everything.
+                if (catchType instanceof HotSpotResolvedObjectType) {
+                    HotSpotResolvedObjectType resolvedType = (HotSpotResolvedObjectType) catchType;
+                    if (resolvedType.mirror() == Throwable.class) {
+                        catchTypeIndex = 0;
+                        catchType = null;
+                    }
+                }
+            }
+            handlers[i] = new ExceptionHandler(startPc, endPc, handlerPc, catchTypeIndex, catchType);
+
+            // Go to the next ExceptionTableElement
+            exceptionTableElement += config.exceptionTableElementSize;
         }
-        return runtime().getCompilerToVM().initializeExceptionHandlers(metaspaceMethod, handlers);
+
+        return handlers;
     }
 
     /**
@@ -173,27 +245,9 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
     }
 
     /**
-     * Returns true if this method has a ForceInline annotation.
-     * 
-     * @return true if ForceInline annotation present, false otherwise
-     */
-    public boolean isForceInline() {
-        return forceInline;
-    }
-
-    /**
-     * Returns true if this method has a DontInline annotation.
-     * 
-     * @return true if DontInline annotation present, false otherwise
-     */
-    public boolean isDontInline() {
-        return dontInline;
-    }
-
-    /**
      * Manually adds a DontInline annotation to this method.
      */
-    public void setDontInline() {
+    public void setNotInlineable() {
         dontInline = true;
         runtime().getCompilerToVM().doNotInlineOrCompile(metaspaceMethod);
     }
@@ -232,8 +286,7 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
             return 0;
         }
         HotSpotVMConfig config = runtime().getConfig();
-        long metaspaceConstMethod = unsafe.getAddress(metaspaceMethod + config.methodConstMethodOffset);
-        return unsafe.getShort(metaspaceConstMethod + config.methodMaxLocalsOffset) & 0xFFFF;
+        return unsafe.getChar(getConstMethod() + config.methodMaxLocalsOffset);
     }
 
     @Override
@@ -243,8 +296,7 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
             return 0;
         }
         HotSpotVMConfig config = runtime().getConfig();
-        long metaspaceConstMethod = unsafe.getAddress(metaspaceMethod + config.methodConstMethodOffset);
-        return config.extraStackEntries + (unsafe.getShort(metaspaceConstMethod + config.constMethodMaxStackOffset) & 0xFFFF);
+        return config.extraStackEntries + unsafe.getChar(getConstMethod() + config.constMethodMaxStackOffset);
     }
 
     @Override
@@ -258,20 +310,26 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
     }
 
     public ResolvedJavaMethod uniqueConcreteMethod() {
-        HotSpotResolvedObjectType[] resultHolder = {null};
-        long ucm = runtime().getCompilerToVM().getUniqueConcreteMethod(metaspaceMethod, resultHolder);
-        if (ucm != 0L) {
-            assert resultHolder[0] != null;
-            return resultHolder[0].createMethod(ucm);
+        if (holder.isInterface()) {
+            // Cannot trust interfaces. Because of:
+            // interface I { void foo(); }
+            // class A { public void foo() {} }
+            // class B extends A implements I { }
+            // class C extends B { public void foo() { } }
+            // class D extends B { }
+            // Would lead to identify C.foo() as the unique concrete method for I.foo() without
+            // seeing A.foo().
+            return null;
         }
-        return null;
+        final long uniqueConcreteMethod = runtime().getCompilerToVM().findUniqueConcreteMethod(metaspaceMethod);
+        if (uniqueConcreteMethod == 0) {
+            return null;
+        }
+        return fromMetaspace(uniqueConcreteMethod);
     }
 
     @Override
     public HotSpotSignature getSignature() {
-        if (signature == null) {
-            signature = new HotSpotSignature(runtime().getCompilerToVM().getSignature(metaspaceMethod));
-        }
         return signature;
     }
 
@@ -287,6 +345,14 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
 
     @Override
     public ProfilingInfo getProfilingInfo() {
+        return getProfilingInfo(true, true);
+    }
+
+    public ProfilingInfo getCompilationProfilingInfo(boolean isOSR) {
+        return getProfilingInfo(!isOSR, isOSR);
+    }
+
+    private ProfilingInfo getProfilingInfo(boolean includeNormal, boolean includeOSR) {
         ProfilingInfo info;
 
         if (UseProfilingInformation.getValue() && methodData == null) {
@@ -305,7 +371,7 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
             // case of a deoptimization.
             info = DefaultProfilingInfo.get(TriState.FALSE);
         } else {
-            info = new HotSpotProfilingInfo(methodData, this);
+            info = new HotSpotProfilingInfo(methodData, this, includeNormal, includeOSR);
         }
         return info;
     }
@@ -325,7 +391,7 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
 
     @Override
     public ConstantPool getConstantPool() {
-        return ((HotSpotResolvedObjectType) getDeclaringClass()).constantPool();
+        return constantPool;
     }
 
     @Override
@@ -350,25 +416,8 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
 
     @Override
     public boolean isSynthetic() {
-        if (isConstructor()) {
-            Constructor<?> javaConstructor = toJavaConstructor();
-            return javaConstructor == null ? false : javaConstructor.isSynthetic();
-        }
-
-        // Cannot use toJava() as it ignores the return type
-        HotSpotSignature sig = getSignature();
-        JavaType[] sigTypes = MetaUtil.signatureToTypes(sig, null);
-        MetaAccessProvider metaAccess = runtime().getHostProviders().getMetaAccess();
-        for (Method method : holder.mirror().getDeclaredMethods()) {
-            if (method.getName().equals(name)) {
-                if (metaAccess.lookupJavaType(method.getReturnType()).equals(sig.getReturnType(holder))) {
-                    if (matches(metaAccess, sigTypes, method.getParameterTypes())) {
-                        return method.isSynthetic();
-                    }
-                }
-            }
-        }
-        return false;
+        int modifiers = getAllModifiers();
+        return (runtime().getConfig().syntheticFlag & modifiers) != 0;
     }
 
     public boolean isDefault() {
@@ -400,18 +449,6 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         return result;
     }
 
-    private static boolean matches(MetaAccessProvider metaAccess, JavaType[] sigTypes, Class<?>[] parameterTypes) {
-        if (parameterTypes.length == sigTypes.length) {
-            for (int i = 0; i < parameterTypes.length; i++) {
-                if (!metaAccess.lookupJavaType(parameterTypes[i]).equals(sigTypes[i])) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        return false;
-    }
-
     private Method toJava() {
         try {
             return holder.mirror().getDeclaredMethod(name, signatureToTypes());
@@ -433,7 +470,15 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         if (dontInline) {
             return false;
         }
-        return runtime().getCompilerToVM().isMethodCompilable(metaspaceMethod);
+        return runtime().getCompilerToVM().canInlineMethod(metaspaceMethod);
+    }
+
+    @Override
+    public boolean shouldBeInlined() {
+        if (forceInline) {
+            return true;
+        }
+        return runtime().getCompilerToVM().shouldInlineMethod(metaspaceMethod);
     }
 
     @Override
@@ -454,12 +499,42 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         return new LineNumberTableImpl(line, bci);
     }
 
+    /**
+     * Returns whether or not this method has a local variable table.
+     * 
+     * @return true if this method has a local variable table
+     */
+    private boolean hasLocalVariableTable() {
+        return (getConstMethodFlags() & runtime().getConfig().constMethodHasLocalVariableTable) != 0;
+    }
+
     @Override
     public LocalVariableTable getLocalVariableTable() {
-        Local[] locals = runtime().getCompilerToVM().getLocalVariableTable(this);
-        if (locals == null) {
+        if (!hasLocalVariableTable()) {
             return null;
         }
+
+        HotSpotVMConfig config = runtime().getConfig();
+        long localVariableTableElement = runtime().getCompilerToVM().getLocalVariableTableStart(this);
+        final int localVariableTableLength = runtime().getCompilerToVM().getLocalVariableTableLength(this);
+        Local[] locals = new Local[localVariableTableLength];
+
+        for (int i = 0; i < localVariableTableLength; i++) {
+            final int startBci = unsafe.getChar(localVariableTableElement + config.localVariableTableElementStartBciOffset);
+            final int endBci = startBci + unsafe.getChar(localVariableTableElement + config.localVariableTableElementLengthOffset);
+            final int nameCpIndex = unsafe.getChar(localVariableTableElement + config.localVariableTableElementNameCpIndexOffset);
+            final int typeCpIndex = unsafe.getChar(localVariableTableElement + config.localVariableTableElementDescriptorCpIndexOffset);
+            final int slot = unsafe.getChar(localVariableTableElement + config.localVariableTableElementSlotOffset);
+
+            String localName = getConstantPool().lookupUtf8(nameCpIndex);
+            String localType = getConstantPool().lookupUtf8(typeCpIndex);
+
+            locals[i] = new LocalImpl(localName, localType, holder, startBci, endBci, slot);
+
+            // Go to the next LocalVariableTableElement
+            localVariableTableElement += config.localVariableTableElementSize;
+        }
+
         return new LocalVariableTableImpl(locals);
     }
 
@@ -483,6 +558,11 @@ public final class HotSpotResolvedJavaMethod extends HotSpotMethod implements Re
         return getVtableIndex() >= 0;
     }
 
+    /**
+     * Returns this method's virtual table index.
+     * 
+     * @return virtual table index
+     */
     private int getVtableIndex() {
         HotSpotVMConfig config = runtime().getConfig();
         return unsafe.getInt(metaspaceMethod + config.methodVtableIndexOffset);

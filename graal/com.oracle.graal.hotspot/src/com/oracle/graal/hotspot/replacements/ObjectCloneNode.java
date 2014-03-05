@@ -25,6 +25,7 @@ package com.oracle.graal.hotspot.replacements;
 import static com.oracle.graal.compiler.GraalCompiler.*;
 
 import java.lang.reflect.*;
+import java.util.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
@@ -79,14 +80,14 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
                 type = getConcreteType(getObject().stamp(), tool.assumptions(), tool.getMetaAccess());
                 if (type != null) {
                     StructuredGraph newGraph = new StructuredGraph();
-                    LocalNode local = newGraph.unique(new LocalNode(0, getObject().stamp()));
+                    ParameterNode param = newGraph.unique(new ParameterNode(0, getObject().stamp()));
                     NewInstanceNode newInstance = newGraph.add(new NewInstanceNode(type, true));
                     newGraph.addAfterFixed(newGraph.start(), newInstance);
                     ReturnNode returnNode = newGraph.add(new ReturnNode(newInstance));
                     newGraph.addAfterFixed(newInstance, returnNode);
 
                     for (ResolvedJavaField field : type.getInstanceFields(true)) {
-                        LoadFieldNode load = newGraph.add(new LoadFieldNode(local, field));
+                        LoadFieldNode load = newGraph.add(new LoadFieldNode(param, field));
                         newGraph.addBeforeFixed(returnNode, load);
                         newGraph.addBeforeFixed(returnNode, newGraph.add(new StoreFieldNode(newInstance, field, load)));
                     }
@@ -138,7 +139,7 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
                     newEntryState[i] = originalState.getEntry(i);
                 }
                 VirtualObjectNode newVirtual = originalVirtual.duplicate();
-                tool.createVirtualObject(newVirtual, newEntryState, null);
+                tool.createVirtualObject(newVirtual, newEntryState, Collections.<MonitorIdNode> emptyList());
                 tool.replaceWithVirtual(newVirtual);
             }
         } else {
@@ -159,7 +160,7 @@ public class ObjectCloneNode extends MacroNode implements VirtualizableAllocatio
                     state[i] = loads[i] = new LoadFieldNode(obj, fields[i]);
                     tool.addNode(loads[i]);
                 }
-                tool.createVirtualObject(newVirtual, state, null);
+                tool.createVirtualObject(newVirtual, state, Collections.<MonitorIdNode> emptyList());
                 tool.replaceWithVirtual(newVirtual);
             }
         }

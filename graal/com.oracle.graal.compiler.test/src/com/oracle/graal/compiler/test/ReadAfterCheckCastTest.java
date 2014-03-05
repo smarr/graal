@@ -30,6 +30,7 @@ import com.oracle.graal.debug.*;
 import com.oracle.graal.debug.Debug.Scope;
 import com.oracle.graal.nodes.*;
 import com.oracle.graal.nodes.extended.*;
+import com.oracle.graal.nodes.spi.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.tiers.*;
 
@@ -83,15 +84,15 @@ public class ReadAfterCheckCastTest extends GraphScheduleTest {
             // structure changes significantly
             StructuredGraph graph = parse(snippet);
             PhaseContext context = new PhaseContext(getProviders(), new Assumptions(false));
-            new LoweringPhase(new CanonicalizerPhase(true)).apply(graph, context);
+            new LoweringPhase(new CanonicalizerPhase(true), LoweringTool.StandardLoweringStage.HIGH_TIER).apply(graph, context);
             new FloatingReadPhase().apply(graph);
-            new OptimizeGuardAnchors().apply(graph);
+            new OptimizeGuardAnchorsPhase().apply(graph);
             new ReadEliminationPhase().apply(graph);
             new CanonicalizerPhase(true).apply(graph, context);
 
             Debug.dump(graph, "After lowering");
 
-            for (FloatingReadNode node : graph.getNodes(LocalNode.class).first().usages().filter(FloatingReadNode.class)) {
+            for (FloatingReadNode node : graph.getNodes(ParameterNode.class).first().usages().filter(FloatingReadNode.class)) {
                 // Checking that the parameter a is not directly used for the access to field
                 // x10 (because x10 must be guarded by the checkcast).
                 Assert.assertTrue(node.location().getLocationIdentity() == LocationIdentity.FINAL_LOCATION);

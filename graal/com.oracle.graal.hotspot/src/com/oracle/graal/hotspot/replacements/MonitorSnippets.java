@@ -34,7 +34,6 @@ import java.util.*;
 
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
-import com.oracle.graal.graph.*;
 import com.oracle.graal.graph.Node.ConstantNodeParameter;
 import com.oracle.graal.graph.Node.NodeIntrinsic;
 import com.oracle.graal.graph.iterators.*;
@@ -422,56 +421,39 @@ public class MonitorSnippets implements Snippets {
             this.useFastLocking = useFastLocking;
         }
 
-        public void lower(MonitorEnterNode monitorenterNode, HotSpotRegistersProvider registers) {
+        public void lower(MonitorEnterNode monitorenterNode, HotSpotRegistersProvider registers, LoweringTool tool) {
             StructuredGraph graph = monitorenterNode.graph();
-            checkBalancedMonitors(graph);
-            FrameState stateAfter = monitorenterNode.stateAfter();
+            checkBalancedMonitors(graph, tool);
 
             Arguments args;
             if (useFastLocking) {
-                args = new Arguments(monitorenter, graph.getGuardsStage());
+                args = new Arguments(monitorenter, graph.getGuardsStage(), tool.getLoweringStage());
             } else {
-                args = new Arguments(monitorenterStub, graph.getGuardsStage());
+                args = new Arguments(monitorenterStub, graph.getGuardsStage(), tool.getLoweringStage());
             }
             args.add("object", monitorenterNode.object());
-            args.addConst("lockDepth", monitorenterNode.getLockDepth());
-            boolean tracingEnabledForMethod = stateAfter != null && (isTracingEnabledForMethod(stateAfter.method()) || isTracingEnabledForMethod(graph.method()));
+            args.addConst("lockDepth", monitorenterNode.getMonitorId().getLockDepth());
             args.addConst("threadRegister", registers.getThreadRegister());
             args.addConst("stackPointerRegister", registers.getStackPointerRegister());
-            args.addConst("trace", isTracingEnabledForType(monitorenterNode.object()) || tracingEnabledForMethod);
+            args.addConst("trace", isTracingEnabledForType(monitorenterNode.object()) || isTracingEnabledForMethod(graph.method()));
 
-            Map<Node, Node> nodes = template(args).instantiate(providers.getMetaAccess(), monitorenterNode, DEFAULT_REPLACER, args);
-
-            for (Node n : nodes.values()) {
-                if (n instanceof BeginLockScopeNode) {
-                    BeginLockScopeNode begin = (BeginLockScopeNode) n;
-                    begin.setStateAfter(stateAfter);
-                }
-            }
+            template(args).instantiate(providers.getMetaAccess(), monitorenterNode, DEFAULT_REPLACER, args);
         }
 
-        public void lower(MonitorExitNode monitorexitNode, @SuppressWarnings("unused") LoweringTool tool) {
+        public void lower(MonitorExitNode monitorexitNode, LoweringTool tool) {
             StructuredGraph graph = monitorexitNode.graph();
-            FrameState stateAfter = monitorexitNode.stateAfter();
 
             Arguments args;
             if (useFastLocking) {
-                args = new Arguments(monitorexit, graph.getGuardsStage());
+                args = new Arguments(monitorexit, graph.getGuardsStage(), tool.getLoweringStage());
             } else {
-                args = new Arguments(monitorexitStub, graph.getGuardsStage());
+                args = new Arguments(monitorexitStub, graph.getGuardsStage(), tool.getLoweringStage());
             }
             args.add("object", monitorexitNode.object());
-            args.addConst("lockDepth", monitorexitNode.getLockDepth());
-            args.addConst("trace", isTracingEnabledForType(monitorexitNode.object()) || isTracingEnabledForMethod(stateAfter.method()) || isTracingEnabledForMethod(graph.method()));
+            args.addConst("lockDepth", monitorexitNode.getMonitorId().getLockDepth());
+            args.addConst("trace", isTracingEnabledForType(monitorexitNode.object()) || isTracingEnabledForMethod(graph.method()));
 
-            Map<Node, Node> nodes = template(args).instantiate(providers.getMetaAccess(), monitorexitNode, DEFAULT_REPLACER, args);
-
-            for (Node n : nodes.values()) {
-                if (n instanceof EndLockScopeNode) {
-                    EndLockScopeNode end = (EndLockScopeNode) n;
-                    end.setStateAfter(stateAfter);
-                }
-            }
+            template(args).instantiate(providers.getMetaAccess(), monitorexitNode, DEFAULT_REPLACER, args);
         }
 
         static boolean isTracingEnabledForType(ValueNode object) {
@@ -507,7 +489,7 @@ public class MonitorSnippets implements Snippets {
          * If balanced monitor checking is enabled then nodes are inserted at the start and all
          * return points of the graph to initialize and check the monitor counter respectively.
          */
-        private void checkBalancedMonitors(StructuredGraph graph) {
+        private void checkBalancedMonitors(StructuredGraph graph, LoweringTool tool) {
             if (CHECK_BALANCED_MONITORS) {
                 NodeIterable<MonitorCounterNode> nodes = graph.getNodes().filter(MonitorCounterNode.class);
                 if (nodes.isEmpty()) {
@@ -521,7 +503,7 @@ public class MonitorSnippets implements Snippets {
                     StructuredGraph inlineeGraph = providers.getReplacements().getSnippet(initCounter.getMethod());
                     InliningUtil.inline(invoke, inlineeGraph, false);
 
-                    List<ReturnNode> rets = graph.getNodes().filter(ReturnNode.class).snapshot();
+                    List<ReturnNode> rets = graph.getNodes(ReturnNode.class).snapshot();
                     for (ReturnNode ret : rets) {
                         returnType = checkCounter.getMethod().getSignature().getReturnType(checkCounter.getMethod().getDeclaringClass());
                         String msg = "unbalanced monitors in " + MetaUtil.format("%H.%n(%p)", graph.method()) + ", count = %d";
@@ -529,11 +511,11 @@ public class MonitorSnippets implements Snippets {
                         callTarget = graph.add(new MethodCallTargetNode(InvokeKind.Static, checkCounter.getMethod(), new ValueNode[]{errMsg}, returnType));
                         invoke = graph.add(new InvokeNode(callTarget, 0));
                         List<ValueNode> stack = Collections.emptyList();
-                        FrameState stateAfter = new FrameState(graph.method(), FrameState.AFTER_BCI, new ValueNode[0], stack, new ValueNode[0], false, false);
+                        FrameState stateAfter = new FrameState(graph.method(), FrameState.AFTER_BCI, new ValueNode[0], stack, new ValueNode[0], new MonitorIdNode[0], false, false);
                         invoke.setStateAfter(graph.add(stateAfter));
                         graph.addBeforeFixed(ret, invoke);
 
-                        Arguments args = new Arguments(checkCounter, graph.getGuardsStage());
+                        Arguments args = new Arguments(checkCounter, graph.getGuardsStage(), tool.getLoweringStage());
                         args.addConst("errMsg", msg);
                         inlineeGraph = template(args).copySpecializedGraph();
 

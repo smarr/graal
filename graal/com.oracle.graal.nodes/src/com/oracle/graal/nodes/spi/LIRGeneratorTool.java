@@ -49,6 +49,8 @@ public interface LIRGeneratorTool extends ArithmeticLIRGenerator {
      */
     boolean canInlineConstant(Constant c);
 
+    boolean canStoreConstant(Constant c, boolean isCompressed);
+
     RegisterAttributes attributes(Register register);
 
     AllocatableValue newVariable(PlatformKind kind);
@@ -61,13 +63,13 @@ public interface LIRGeneratorTool extends ArithmeticLIRGenerator {
 
     Value emitAddress(StackSlot slot);
 
-    Value emitLoad(Kind kind, Value address, DeoptimizingNode deopting);
+    Value emitLoad(Kind kind, Value address, Access access);
 
-    void emitStore(Kind kind, Value address, Value input, DeoptimizingNode deopting);
+    void emitStore(Kind kind, Value address, Value input, Access access);
 
     void emitMembar(int barriers);
 
-    void emitDeoptimize(Value actionAndReason, DeoptimizingNode deopting);
+    void emitDeoptimize(Value actionAndReason, Value failedSpeculation, DeoptimizingNode deopting);
 
     void emitNullCheck(ValueNode v, DeoptimizingNode deopting);
 
@@ -102,6 +104,7 @@ public interface LIRGeneratorTool extends ArithmeticLIRGenerator {
 
     /**
      * Called just before register allocation is performed on the LIR owned by this generator.
+     * Overriding implementations of this method must call the overridden method.
      */
     void beforeRegisterAllocation();
 

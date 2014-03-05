@@ -25,7 +25,6 @@ package com.oracle.graal.hotspot.sparc;
 import com.oracle.graal.api.code.*;
 import com.oracle.graal.api.meta.*;
 import com.oracle.graal.api.runtime.*;
-import com.oracle.graal.graph.*;
 import com.oracle.graal.hotspot.*;
 import com.oracle.graal.hotspot.meta.*;
 import com.oracle.graal.nodes.spi.*;
@@ -50,7 +49,7 @@ public class SPARCHotSpotBackendFactory implements HotSpotBackendFactory {
         assert host == null;
         TargetDescription target = createTarget();
 
-        HotSpotRegistersProvider registers = new HotSpotRegisters(Register.None, Register.None, Register.None); // FIXME
+        HotSpotRegistersProvider registers = createRegisters();
         HotSpotMetaAccessProvider metaAccess = new HotSpotMetaAccessProvider(runtime);
         HotSpotCodeCacheProvider codeCache = new SPARCHotSpotCodeCacheProvider(runtime, target);
         HotSpotConstantReflectionProvider constantReflection = new HotSpotConstantReflectionProvider(runtime);
@@ -69,9 +68,18 @@ public class SPARCHotSpotBackendFactory implements HotSpotBackendFactory {
         return new SPARCHotSpotBackend(runtime, providers);
     }
 
+    protected HotSpotRegistersProvider createRegisters() {
+        return new HotSpotRegisters(SPARC.g2, SPARC.g6, SPARC.sp);
+    }
+
     @SuppressWarnings("unused")
     private static Value[] createNativeABICallerSaveRegisters(HotSpotVMConfig config, RegisterConfig regConfig) {
-        throw GraalInternalError.unimplemented();
+        CalleeSaveLayout csl = regConfig.getCalleeSaveLayout();
+        Value[] nativeABICallerSaveRegisters = new Value[csl.registers.length];
+        for (int i = 0; i < csl.registers.length; i++) {
+            nativeABICallerSaveRegisters[i] = csl.registers[i].asValue();
+        }
+        return nativeABICallerSaveRegisters;
     }
 
     public String getArchitecture() {

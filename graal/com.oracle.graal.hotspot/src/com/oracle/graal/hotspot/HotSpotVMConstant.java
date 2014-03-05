@@ -30,5 +30,11 @@ public @interface HotSpotVMConstant {
 
     String name();
 
-    boolean optional() default false;
+    /**
+     * List of architectures where this constant is required. Names are derived from
+     * {@link HotSpotVMConfig#getHostArchitectureName()}. An empty list implies that the constant is
+     * required on all architectures.
+     */
+    String[] archs() default {};
+
 }

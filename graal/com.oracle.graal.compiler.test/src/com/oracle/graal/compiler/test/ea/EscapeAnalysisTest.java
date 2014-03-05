@@ -28,6 +28,7 @@ import com.oracle.graal.api.meta.*;
 import com.oracle.graal.graph.*;
 import com.oracle.graal.loop.phases.*;
 import com.oracle.graal.nodes.calc.*;
+import com.oracle.graal.nodes.type.*;
 import com.oracle.graal.nodes.virtual.*;
 import com.oracle.graal.phases.common.*;
 import com.oracle.graal.phases.schedule.*;
@@ -158,6 +159,103 @@ public class EscapeAnalysisTest extends EATestBase {
     }
 
     @Test
+    public void testMergeAllocationsInt() {
+        testEscapeAnalysis("testMergeAllocationsIntSnippet", Constant.forInt(1), false);
+    }
+
+    public int testMergeAllocationsIntSnippet(int a) {
+        TestClassInt obj;
+        if (a < 0) {
+            obj = new TestClassInt(1, 2);
+            notInlineable();
+        } else {
+            obj = new TestClassInt(1, 2);
+            notInlineable();
+        }
+        return obj.x <= 3 ? 1 : 0;
+    }
+
+    @Test
+    public void testMergeAllocationsObj() {
+        testEscapeAnalysis("testMergeAllocationsObjSnippet", Constant.forInt(1), false);
+    }
+
+    public int testMergeAllocationsObjSnippet(int a) {
+        TestClassObject obj;
+        Integer one = 1;
+        Integer two = 2;
+        Integer three = 3;
+        if (a < 0) {
+            obj = new TestClassObject(one, two);
+            notInlineable();
+        } else {
+            obj = new TestClassObject(one, three);
+            notInlineable();
+        }
+        return ((Integer) obj.x).intValue() <= 3 ? 1 : 0;
+    }
+
+    @Test
+    public void testMergeAllocationsObjCirc() {
+        testEscapeAnalysis("testMergeAllocationsObjCircSnippet", Constant.forInt(1), false);
+    }
+
+    public int testMergeAllocationsObjCircSnippet(int a) {
+        TestClassObject obj;
+        Integer one = 1;
+        Integer two = 2;
+        Integer three = 3;
+        if (a < 0) {
+            obj = new TestClassObject(one);
+            obj.y = obj;
+            obj.y = two;
+            notInlineable();
+        } else {
+            obj = new TestClassObject(one);
+            obj.y = obj;
+            obj.y = three;
+            notInlineable();
+        }
+        return ((Integer) obj.x).intValue() <= 3 ? 1 : 0;
+    }
+
+    static class MyException extends RuntimeException {
+
+        private static final long serialVersionUID = 0L;
+
+        protected Integer value;
+
+        public MyException(Integer value) {
+            super((Throwable) null);
+            this.value = value;
+        }
+
+        @SuppressWarnings("sync-override")
+        @Override
+        public final Throwable fillInStackTrace() {
+            return null;
+        }
+    }
+
+    @Test
+    public void testMergeAllocationsException() {
+        testEscapeAnalysis("testMergeAllocationsExceptionSnippet", Constant.forInt(1), false);
+    }
+
+    public int testMergeAllocationsExceptionSnippet(int a) {
+        MyException obj;
+        Integer one = 1;
+        if (a < 0) {
+            obj = new MyException(one);
+            notInlineable();
+        } else {
+            obj = new MyException(one);
+            notInlineable();
+        }
+        return obj.value <= 3 ? 1 : 0;
+    }
+
+    @Test
     public void testCheckCast() {
         testEscapeAnalysis("testCheckCastSnippet", Constant.forObject(TestClassObject.class), false);
     }
@@ -181,7 +279,7 @@ public class EscapeAnalysisTest extends EATestBase {
 
     @SuppressWarnings("unused")
     public static void testNewNodeSnippet() {
-        new IntegerAddNode(Kind.Int, null, null);
+        new IntegerAddNode(new IntegerStamp(32, false, Integer.MIN_VALUE, Integer.MAX_VALUE, 0, 0xFFFFFFFF), null, null);
     }
 
     /**
@@ -213,8 +311,9 @@ public class EscapeAnalysisTest extends EATestBase {
         prepareGraph("testFullyUnrolledLoopSnippet", false);
         new LoopFullUnrollPhase(new CanonicalizerPhase(true)).apply(graph, context);
         new PartialEscapePhase(false, new CanonicalizerPhase(true)).apply(graph, context);
-        Assert.assertTrue(returnNode.result() instanceof AllocatedObjectNode);
-        CommitAllocationNode commit = ((AllocatedObjectNode) returnNode.result()).getCommit();
+        Assert.assertEquals(1, returnNodes.size());
+        Assert.assertTrue(returnNodes.get(0).result() instanceof AllocatedObjectNode);
+        CommitAllocationNode commit = ((AllocatedObjectNode) returnNodes.get(0).result()).getCommit();
         Assert.assertEquals(2, commit.getValues().size());
         Assert.assertEquals(1, commit.getVirtualObjects().size());
         Assert.assertTrue("non-cyclic data structure expected", commit.getVirtualObjects().get(0) != commit.getValues().get(0));
@@ -244,5 +343,28 @@ public class EscapeAnalysisTest extends EATestBase {
         new LoopTransformHighPhase().apply(graph);
         new LoopTransformLowPhase().apply(graph);
         new SchedulePhase().apply(graph);
+    }
+
+    public static void testDeoptMonitorSnippetInner(Object o2, Object t, int i) {
+        staticField = null;
+        if (i == 0) {
+            staticField = o2;
+            Number n = (Number) t;
+            n.toString();
+        }
+    }
+
+    public static void testDeoptMonitorSnippet(Object t, int i) {
+        TestClassObject o = new TestClassObject();
+        TestClassObject o2 = new TestClassObject(o);
+
+        synchronized (o) {
+            testDeoptMonitorSnippetInner(o2, t, i);
+        }
+    }
+
+    @Test
+    public void testDeoptMonitor() {
+        test("testDeoptMonitorSnippet", new Object(), 0);
     }
 }

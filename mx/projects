@@ -1,5 +1,5 @@
 # The format of this file is described in the documentation for my.py.
-
+mxversion=1.0
 suite=graal
 
 library@JDK_TOOLS@path=${JAVA_HOME}/lib/tools.jar
@@ -24,8 +24,15 @@ library@JACOCOREPORT@urls=http://lafo.ssw.uni-linz.ac.at/jacoco/jacocoreport.jar
 library@DACAPO_SCALA@path=lib/dacapo-scala-0.1.0-20120216.jar
 library@DACAPO_SCALA@urls=http://repo.scalabench.org/snapshots/org/scalabench/benchmarks/scala-benchmark-suite/0.1.0-SNAPSHOT/scala-benchmark-suite-0.1.0-20120216.103539-3.jar
 
-library@OKRA@path=lib/okra-1.2.jar
-library@OKRA@urls=http://cr.openjdk.java.net/~tdeneau/okra-1.2.jar
+library@OKRA@path=lib/okra-1.8.jar
+library@OKRA@urls=http://cr.openjdk.java.net/~tdeneau/okra-1.8.jar
+library@OKRA@sourcePath=lib/okra-1.8-src.jar
+library@OKRA@sourceUrls=http://cr.openjdk.java.net/~tdeneau/okra-1.8-src.jar
+
+library@OKRA_WITH_SIM@path=lib/okra-1.8-with-sim.jar
+library@OKRA_WITH_SIM@urls=http://cr.openjdk.java.net/~tdeneau/okra-1.8-with-sim.jar
+library@OKRA_WITH_SIM@sourcePath=lib/okra-1.8-with-sim-src.jar
+library@OKRA_WITH_SIM@sourceUrls=http://cr.openjdk.java.net/~tdeneau/okra-1.8-with-sim-src.jar
 
 distribution@GRAAL@path=graal.jar
 distribution@GRAAL@dependencies=\
@@ -135,7 +142,7 @@ project@com.oracle.graal.hotspot@workingSets=Graal,HotSpot
 # graal.hotspot.amd64
 project@com.oracle.graal.hotspot.amd64@subDir=graal
 project@com.oracle.graal.hotspot.amd64@sourceDirs=src
-project@com.oracle.graal.hotspot.amd64@dependencies=com.oracle.graal.hotspot,com.oracle.graal.compiler.amd64,com.oracle.graal.replacements.amd64
+project@com.oracle.graal.hotspot.amd64@dependencies=com.oracle.graal.compiler.amd64,com.oracle.graal.hotspot,com.oracle.graal.replacements.amd64
 project@com.oracle.graal.hotspot.amd64@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.hotspot.amd64@annotationProcessors=com.oracle.graal.service.processor
 project@com.oracle.graal.hotspot.amd64@javaCompliance=1.7
@@ -153,7 +160,7 @@ project@com.oracle.graal.hotspot.sparc@workingSets=Graal,HotSpot,SPARC
 # graal.hotspot.ptx
 project@com.oracle.graal.hotspot.ptx@subDir=graal
 project@com.oracle.graal.hotspot.ptx@sourceDirs=src
-project@com.oracle.graal.hotspot.ptx@dependencies=com.oracle.graal.ptx,com.oracle.graal.compiler.ptx
+project@com.oracle.graal.hotspot.ptx@dependencies=com.oracle.graal.ptx,com.oracle.graal.compiler.ptx,com.oracle.graal.hotspot
 project@com.oracle.graal.hotspot.ptx@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.hotspot.ptx@annotationProcessors=com.oracle.graal.service.processor
 project@com.oracle.graal.hotspot.ptx@javaCompliance=1.7
@@ -162,7 +169,7 @@ project@com.oracle.graal.hotspot.ptx@workingSets=Graal,HotSpot,PTX
 # graal.hotspot.hsail
 project@com.oracle.graal.hotspot.hsail@subDir=graal
 project@com.oracle.graal.hotspot.hsail@sourceDirs=src
-project@com.oracle.graal.hotspot.hsail@dependencies=com.oracle.graal.compiler.hsail,com.oracle.graal.hotspot
+project@com.oracle.graal.hotspot.hsail@dependencies=com.oracle.graal.replacements.hsail,com.oracle.graal.hotspot
 project@com.oracle.graal.hotspot.hsail@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.hotspot.hsail@annotationProcessors=com.oracle.graal.service.processor
 project@com.oracle.graal.hotspot.hsail@javaCompliance=1.7
@@ -309,7 +316,16 @@ project@com.oracle.graal.replacements.amd64@sourceDirs=src
 project@com.oracle.graal.replacements.amd64@dependencies=com.oracle.graal.replacements
 project@com.oracle.graal.replacements.amd64@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.replacements.amd64@javaCompliance=1.7
+project@com.oracle.graal.replacements.amd64@annotationProcessors=com.oracle.graal.service.processor
 project@com.oracle.graal.replacements.amd64@workingSets=Graal,Replacements,AMD64
+
+# graal.replacements.hsail
+project@com.oracle.graal.replacements.hsail@subDir=graal
+project@com.oracle.graal.replacements.hsail@sourceDirs=src
+project@com.oracle.graal.replacements.hsail@dependencies=com.oracle.graal.compiler.hsail
+project@com.oracle.graal.replacements.hsail@checkstyle=com.oracle.graal.graph
+project@com.oracle.graal.replacements.hsail@javaCompliance=1.7
+project@com.oracle.graal.replacements.hsail@workingSets=Graal,Replacements,HSAIL
 
 # graal.replacements.test
 project@com.oracle.graal.replacements.test@subDir=graal
@@ -403,7 +419,7 @@ project@com.oracle.graal.compiler.amd64.test@workingSets=Graal,AMD64,Test
 # graal.compiler.ptx
 project@com.oracle.graal.compiler.ptx@subDir=graal
 project@com.oracle.graal.compiler.ptx@sourceDirs=src
-project@com.oracle.graal.compiler.ptx@dependencies=com.oracle.graal.lir.ptx,com.oracle.graal.hotspot
+project@com.oracle.graal.compiler.ptx@dependencies=com.oracle.graal.lir.ptx,com.oracle.graal.compiler
 project@com.oracle.graal.compiler.ptx@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.compiler.ptx@javaCompliance=1.7
 project@com.oracle.graal.compiler.ptx@workingSets=Graal,PTX
@@ -559,7 +575,7 @@ project@com.oracle.graal.compiler.hsail@javaCompliance=1.7
 # graal.compiler.hsail.test.infra - HSAIL compiler test infrastructure
 project@com.oracle.graal.compiler.hsail.test.infra@subDir=graal
 project@com.oracle.graal.compiler.hsail.test.infra@sourceDirs=src
-project@com.oracle.graal.compiler.hsail.test.infra@dependencies=com.oracle.graal.hotspot.hsail,JUNIT
+project@com.oracle.graal.compiler.hsail.test.infra@dependencies=com.oracle.graal.hotspot.hsail,JUNIT,OKRA_WITH_SIM
 project@com.oracle.graal.compiler.hsail.test.infra@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.compiler.hsail.test.infra@javaCompliance=1.7
 
@@ -569,7 +585,6 @@ project@com.oracle.graal.compiler.hsail.test@sourceDirs=src
 project@com.oracle.graal.compiler.hsail.test@dependencies=com.oracle.graal.compiler.hsail.test.infra,com.oracle.graal.compiler.test
 project@com.oracle.graal.compiler.hsail.test@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.compiler.hsail.test@javaCompliance=1.7
-
 
 # graal.asm.hsail
 project@com.oracle.graal.asm.hsail@subDir=graal
@@ -667,10 +682,19 @@ project@com.oracle.graal.truffle.test@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.truffle.test@javaCompliance=1.7
 project@com.oracle.graal.truffle.test@workingSets=Graal,Truffle,Test
 
+# graal.truffle.hotspot
+project@com.oracle.graal.truffle.hotspot@subDir=graal
+project@com.oracle.graal.truffle.hotspot@sourceDirs=src
+project@com.oracle.graal.truffle.hotspot@dependencies=com.oracle.graal.truffle,com.oracle.graal.hotspot
+project@com.oracle.graal.truffle.hotspot@checkstyle=com.oracle.graal.graph
+project@com.oracle.graal.truffle.hotspot@javaCompliance=1.7
+project@com.oracle.graal.truffle.hotspot@annotationProcessors=com.oracle.graal.service.processor
+project@com.oracle.graal.truffle.hotspot@workingSets=Graal,Truffle
+
 # graal.truffle.hotspot.amd64
 project@com.oracle.graal.truffle.hotspot.amd64@subDir=graal
 project@com.oracle.graal.truffle.hotspot.amd64@sourceDirs=src
-project@com.oracle.graal.truffle.hotspot.amd64@dependencies=com.oracle.graal.truffle,com.oracle.graal.hotspot.amd64
+project@com.oracle.graal.truffle.hotspot.amd64@dependencies=com.oracle.graal.truffle.hotspot,com.oracle.graal.hotspot.amd64
 project@com.oracle.graal.truffle.hotspot.amd64@checkstyle=com.oracle.graal.graph
 project@com.oracle.graal.truffle.hotspot.amd64@javaCompliance=1.7
 project@com.oracle.graal.truffle.hotspot.amd64@annotationProcessors=com.oracle.graal.service.processor

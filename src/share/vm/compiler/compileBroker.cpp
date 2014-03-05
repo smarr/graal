@@ -1144,7 +1144,9 @@ void CompileBroker::compile_method_base(methodHandle method,
   }
 #ifdef GRAALVM
   if (!JavaThread::current()->is_graal_compiling()) {
-    GraalCompiler::instance()->compile_method(method, osr_bci, is_compile_blocking(method, osr_bci));
+    bool blockingCompilation = is_compile_blocking(method, osr_bci) ||
+      CompilationPolicy::can_be_offloaded_to_gpu(method);
+    GraalCompiler::instance()->compile_method(method, osr_bci, blockingCompilation);
   } else {
     // Recursive compile request => ignore.
   }
@@ -1466,6 +1468,16 @@ uint CompileBroker::assign_compile_id(methodHandle method, int osr_bci) {
   // Method was not in the appropriate compilation range.
   method->set_not_compilable_quietly();
   return 0;
+}
+
+
+// ------------------------------------------------------------------
+// CompileBroker::assign_compile_id_unlocked
+//
+// Public wrapper for assign_compile_id that acquires the needed locks
+uint CompileBroker::assign_compile_id_unlocked(Thread* thread, methodHandle method, int osr_bci) {
+  MutexLocker locker(MethodCompileQueue_lock, thread);
+  return assign_compile_id(method, osr_bci);
 }
 
 
@@ -2311,7 +2323,7 @@ const char* CompileBroker::compiler_name(int comp_level) {
   }
 }
 
-void CompileBroker::print_times() {
+void CompileBroker::print_times(bool per_compiler, bool aggregate) {
 #ifdef GRAAL
   elapsedTimer standard_compilation;
   elapsedTimer total_compilation;
@@ -2331,7 +2343,7 @@ void CompileBroker::print_times() {
   for (unsigned int i = 0; i < sizeof(_compilers) / sizeof(AbstractCompiler*); i++) {
     AbstractCompiler* comp = _compilers[i];
     if (comp != NULL) {
-      if (!printedHeader) {
+      if (per_compiler && aggregate && !printedHeader) {
         printedHeader = true;
         tty->cr();
         tty->print_cr("Individual compiler times (for compiled methods only)");
@@ -2352,11 +2364,13 @@ void CompileBroker::print_times() {
       nmethods_size += stats->_nmethods_size;
       nmethods_code_size += stats->_nmethods_code_size;
 
+      if (per_compiler) {
       tty->print_cr("  %s {speed: %d bytes/s; standard: %6.3f s, %d bytes, %d methods; osr: %6.3f s, %d bytes, %d methods; nmethods_size: %d bytes; nmethods_code_size: %d bytes}",
           comp->name(), stats->bytes_per_second(),
           stats->_standard._time.seconds(), stats->_standard._bytes, stats->_standard._count,
           stats->_osr._time.seconds(), stats->_osr._bytes, stats->_osr._count,
           stats->_nmethods_size, stats->_nmethods_code_size);
+      }
     }
   }
   total_compile_count = osr_compile_count + standard_compile_count;
@@ -2378,6 +2392,9 @@ void CompileBroker::print_times() {
   int nmethods_code_size = CompileBroker::_sum_nmethod_size;
 #endif
 
+  if (!aggregate) {
+    return;
+  }
   tty->cr();
   tty->print_cr("Accumulated compiler times (for compiled methods only)");
   tty->print_cr("------------------------------------------------");

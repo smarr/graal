@@ -45,6 +45,7 @@ import com.oracle.graal.lir.sparc.SPARCMove.LoadOp;
 import com.oracle.graal.lir.sparc.SPARCMove.StoreConstantOp;
 import com.oracle.graal.lir.sparc.SPARCMove.StoreOp;
 import com.oracle.graal.nodes.*;
+import com.oracle.graal.nodes.extended.*;
 import com.oracle.graal.nodes.java.MethodCallTargetNode.InvokeKind;
 
 public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSpotLIRGenerator {
@@ -71,7 +72,6 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
     @SuppressWarnings("hiding")
     @Override
     protected DebugInfoBuilder createDebugInfoBuilder(NodeMap<Value> nodeOperands) {
-        assert config.basicLockSize == 8;
         HotSpotLockStack lockStack = new HotSpotLockStack(frameMap, Kind.Long);
         return new HotSpotDebugInfoBuilder(nodeOperands, lockStack);
     }
@@ -96,10 +96,11 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
 
     @Override
     public Variable emitForeignCall(ForeignCallLinkage linkage, DeoptimizingNode info, Value... args) {
+        Stub stub = getStub();
         Variable result;
 
         if (linkage.canDeoptimize()) {
-            assert info != null;
+            assert info != null || stub != null;
             HotSpotRegistersProvider registers = getProviders().getRegisters();
             Register thread = registers.getThreadRegister();
             Register stackPointer = registers.getStackPointerRegister();
@@ -191,23 +192,27 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
         append(new SPARCHotSpotUnwindOp(exceptionParameter));
     }
 
-    private void moveDeoptimizationActionAndReasonToThread(Value actionAndReason) {
-        int pendingDeoptimizationOffset = runtime().getConfig().pendingDeoptimizationOffset;
+    private void moveDeoptValuesToThread(Value actionAndReason, Value speculation) {
+        moveValueToThread(actionAndReason, runtime().getConfig().pendingDeoptimizationOffset);
+        moveValueToThread(speculation, runtime().getConfig().pendingFailedSpeculationOffset);
+    }
+
+    private void moveValueToThread(Value v, int offset) {
         Kind wordKind = getProviders().getCodeCache().getTarget().wordKind;
         RegisterValue thread = getProviders().getRegisters().getThreadRegister().asValue(wordKind);
-        SPARCAddressValue pendingDeoptAddress = new SPARCAddressValue(actionAndReason.getKind(), thread, pendingDeoptimizationOffset);
-        append(new StoreOp(actionAndReason.getKind(), pendingDeoptAddress, emitMove(actionAndReason), null));
+        SPARCAddressValue pendingDeoptAddress = new SPARCAddressValue(v.getKind(), thread, offset);
+        append(new StoreOp(v.getKind(), pendingDeoptAddress, emitMove(v), null));
     }
 
     @Override
-    public void emitDeoptimize(Value actionAndReason, DeoptimizingNode deopting) {
-        moveDeoptimizationActionAndReasonToThread(actionAndReason);
+    public void emitDeoptimize(Value actionAndReason, Value speculation, DeoptimizingNode deopting) {
+        moveDeoptValuesToThread(actionAndReason, speculation);
         append(new SPARCDeoptimizeOp(state(deopting)));
     }
 
     @Override
     public void emitDeoptimizeCaller(DeoptimizationAction action, DeoptimizationReason reason) {
-        moveDeoptimizationActionAndReasonToThread(getMetaAccess().encodeDeoptActionAndReason(action, reason, 0));
+        moveDeoptValuesToThread(getMetaAccess().encodeDeoptActionAndReason(action, reason, 0), Constant.NULL_OBJECT);
         append(new SPARCHotSpotDeoptimizeCallerOp());
     }
 
@@ -231,15 +236,18 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
         append(op);
     }
 
-    private static boolean isCompressCandidate(DeoptimizingNode access) {
-        return access != null && ((HeapAccess) access).isCompressible();
+    private static boolean isCompressCandidate(Access access) {
+        return access != null && access.isCompressible();
     }
 
     @Override
-    public Variable emitLoad(Kind kind, Value address, DeoptimizingNode access) {
+    public Variable emitLoad(Kind kind, Value address, Access access) {
         SPARCAddressValue loadAddress = asAddressValue(address);
-        Variable result = newVariable(kind);
-        assert access == null || access instanceof HeapAccess;
+        Variable result = newVariable(kind.getStackKind());
+        LIRFrameState state = null;
+        if (access instanceof DeoptimizingNode) {
+            state = state((DeoptimizingNode) access);
+        }
         if (isCompressCandidate(access)) {
             if (config.useCompressedOops && kind == Kind.Object) {
                 // append(new LoadCompressedPointer(kind, result, loadAddress, access != null ?
@@ -254,21 +262,24 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
                 // config.logKlassAlignment));
                 throw GraalInternalError.unimplemented();
             } else {
-                append(new LoadOp(kind, result, loadAddress, access != null ? state(access) : null));
+                append(new LoadOp(kind, result, loadAddress, state));
             }
         } else {
-            append(new LoadOp(kind, result, loadAddress, access != null ? state(access) : null));
+            append(new LoadOp(kind, result, loadAddress, state));
         }
         return result;
     }
 
     @Override
-    public void emitStore(Kind kind, Value address, Value inputVal, DeoptimizingNode access) {
+    public void emitStore(Kind kind, Value address, Value inputVal, Access access) {
         SPARCAddressValue storeAddress = asAddressValue(address);
-        LIRFrameState state = access != null ? state(access) : null;
+        LIRFrameState state = null;
+        if (access instanceof DeoptimizingNode) {
+            state = state((DeoptimizingNode) access);
+        }
         if (isConstant(inputVal)) {
             Constant c = asConstant(inputVal);
-            if (canStoreConstant(c)) {
+            if (canStoreConstant(c, isCompressCandidate(access))) {
                 if (inputVal.getKind() == Kind.Object) {
                     append(new StoreConstantOp(kind, storeAddress, c, state, config.useCompressedOops && isCompressCandidate(access)));
                 } else if (inputVal.getKind() == Kind.Long) {
@@ -310,5 +321,10 @@ public class SPARCHotSpotLIRGenerator extends SPARCLIRGenerator implements HotSp
     public Value emitNot(Value input) {
         GraalInternalError.shouldNotReachHere("binary negation not implemented");
         return null;
+    }
+
+    public void emitPrefetchAllocate(ValueNode address, ValueNode distance) {
+        SPARCAddressValue addr = emitAddress(operand(address), 0, loadNonConst(operand(distance)), 1);
+        append(new SPARCPrefetchOp(addr, config.allocatePrefetchInstr));
     }
 }

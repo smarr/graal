@@ -60,6 +60,14 @@ public interface MetaAccessProvider {
     ResolvedJavaType lookupJavaType(Constant constant);
 
     /**
+     * Returns the number of bytes occupied by this constant value or constant object.
+     * 
+     * @param constant the constant whose bytes should be measured
+     * @return the number of bytes occupied by this constant
+     */
+    long getMemorySize(Constant constant);
+
+    /**
      * Parses a <a
      * href="http://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.3.3">method
      * descriptor</a> into a {@link Signature}. The behavior of this method is undefined if the
@@ -70,13 +78,17 @@ public interface MetaAccessProvider {
     /**
      * Encodes a deoptimization action and a deoptimization reason in an integer value.
      * 
-     * @param speculationId a speculation ID returned by SpeculationLog.addSpeculation
+     * @param debugId an integer that can be used to track the origin of a deoptimization at
+     *            runtime. There is no guarantee that the runtime will use this value. The runtime
+     *            may even keep fewer than 32 bits.
      * 
      * @return the encoded value as an integer
      */
-    Constant encodeDeoptActionAndReason(DeoptimizationAction action, DeoptimizationReason reason, int speculationId);
+    Constant encodeDeoptActionAndReason(DeoptimizationAction action, DeoptimizationReason reason, int debugId);
 
     DeoptimizationReason decodeDeoptReason(Constant constant);
 
     DeoptimizationAction decodeDeoptAction(Constant constant);
+
+    int decodeDebugId(Constant constant);
 }

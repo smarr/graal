@@ -637,7 +637,11 @@ def build(args, vm=None):
             env.setdefault('ALT_BOOTDIR', mx.java().jdk)
 
             # extract latest release tag for graal
-            tags = [x.split(' ')[0] for x in subprocess.check_output(['hg', 'tags']).split('\n') if x.startswith("graal-")]
+            try:
+                tags = [x.split(' ')[0] for x in subprocess.check_output(['hg', 'tags']).split('\n') if x.startswith("graal-")]
+            except subprocess.CalledProcessError:
+                with open('.hgtags') as f:
+                    tags = [x.split(' ')[0] for x in f.readlines() if x.startswith("graal-")]
             if tags:
                 # extract the most recent tag
                 tag = sorted(tags, key=lambda e: [int(x) for x in e[len("graal-"):].split('.')], reverse=True)[0]

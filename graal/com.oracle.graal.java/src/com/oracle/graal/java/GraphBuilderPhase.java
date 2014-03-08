@@ -214,16 +214,6 @@ public class GraphBuilderPhase extends BasePhase<HighTierContext> {
             return getName() + " " + MetaUtil.format("%H.%n(%p):%r", method);
         }
 
-        private BciBlockMapping createBlockMap() {
-            BciBlockMapping map = new BciBlockMapping(method);
-            map.build();
-            if (Debug.isDumpEnabled()) {
-                Debug.dump(map, MetaUtil.format("After block building %f %R %H.%n(%P)", method));
-            }
-
-            return map;
-        }
-
         protected void build() {
             if (PrintProfilingInformation.getValue()) {
                 TTY.println("Profiling info for " + MetaUtil.format("%H.%n(%p)", method));
@@ -233,7 +223,7 @@ public class GraphBuilderPhase extends BasePhase<HighTierContext> {
             Indent indent = Debug.logAndIndent("build graph for %s", method);
 
             // compute the block map, setup exception handlers and get the entrypoint(s)
-            BciBlockMapping blockMap = createBlockMap();
+            BciBlockMapping blockMap = BciBlockMapping.create(method);
             loopHeaders = blockMap.loopHeaders;
 
             lastInstr = currentGraph.start();
@@ -303,11 +293,11 @@ public class GraphBuilderPhase extends BasePhase<HighTierContext> {
             return unwindBlock;
         }
 
-        public BytecodeStream stream() {
+        protected BytecodeStream stream() {
             return stream;
         }
 
-        public int bci() {
+        protected int bci() {
             return stream.currentBCI();
         }
 
@@ -325,14 +315,6 @@ public class GraphBuilderPhase extends BasePhase<HighTierContext> {
                 value = frameState.pop(kind);
             }
             frameState.storeLocal(index, value);
-        }
-
-        public static boolean covers(ExceptionHandler handler, int bci) {
-            return handler.getStartBCI() <= bci && bci < handler.getEndBCI();
-        }
-
-        public static boolean isCatchAll(ExceptionHandler handler) {
-            return handler.catchTypeCPI() == 0;
         }
 
         /**
@@ -838,10 +820,12 @@ public class GraphBuilderPhase extends BasePhase<HighTierContext> {
             eagerResolvingForSnippets(cpi, opcode);
             JavaMethod result = constantPool.lookupMethod(cpi, opcode);
             /*
-             * assert !graphBuilderConfig.unresolvedIsError() || ((result instanceof
-             * ResolvedJavaMethod) && ((ResolvedJavaMethod)
-             * result).getDeclaringClass().isInitialized()) : result;
+             * In general, one cannot assume that the declaring class being initialized is useful,
+             * since the actual concrete receiver may be a different class (except for static
+             * calls). Also, interfaces are initialized only under special circumstances, so that
+             * this assertion would often fail for interface calls.
              */
+            assert !graphBuilderConfig.unresolvedIsError() || (result instanceof ResolvedJavaMethod && (opcode != INVOKESTATIC || ((ResolvedJavaMethod) result).getDeclaringClass().isInitialized()));
             return result;
         }
 

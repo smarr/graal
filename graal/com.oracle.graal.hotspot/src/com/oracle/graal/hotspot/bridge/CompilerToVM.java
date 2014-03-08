@@ -116,17 +116,56 @@ public interface CompilerToVM {
      */
     long lookupType(String name, Class<?> accessingClass, boolean eagerResolve);
 
+    long lookupKlassByName(String name, Class<?> accessingClass);
+
     Object lookupConstantInPool(long metaspaceConstantPool, int cpi);
 
-    JavaMethod lookupMethodInPool(long metaspaceConstantPool, int cpi, byte opcode);
+    int lookupNameAndTypeRefIndexInPool(long metaspaceConstantPool, int cpi);
 
-    JavaType lookupTypeInPool(long metaspaceConstantPool, int cpi);
+    long lookupNameRefInPool(long metaspaceConstantPool, int cpi);
 
-    JavaField lookupFieldInPool(long metaspaceConstantPool, int cpi, byte opcode);
+    long lookupSignatureRefInPool(long metaspaceConstantPool, int cpi);
 
-    void lookupReferencedTypeInPool(long metaspaceConstantPool, int cpi, byte opcode);
+    int lookupKlassRefIndexInPool(long metaspaceConstantPool, int cpi);
 
-    Object lookupAppendixInPool(long metaspaceConstantPool, int cpi, byte opcode);
+    /**
+     * Looks up a class entry in a constant pool.
+     * 
+     * @param metaspaceConstantPool metaspace constant pool pointer
+     * @param cpi constant pool index
+     * @return a metaspace Klass for a resolved method entry, a metaspace Symbol otherwise (with
+     *         tagging)
+     */
+    long lookupKlassInPool(long metaspaceConstantPool, int cpi);
+
+    /**
+     * Looks up a method entry in a constant pool.
+     * 
+     * @param metaspaceConstantPool metaspace constant pool pointer
+     * @param cpi constant pool index
+     * @return a metaspace Method for a resolved method entry, 0 otherwise
+     */
+    long lookupMethodInPool(long metaspaceConstantPool, int cpi, byte opcode);
+
+    /**
+     * Looks up a field entry in a constant pool and attempts to resolve it. The values returned in
+     * {@code info} are:
+     * 
+     * <pre>
+     *     [(int) flags,   // only valid if field is resolved
+     *      (int) offset]  // only valid if field is resolved
+     * </pre>
+     * 
+     * @param metaspaceConstantPool metaspace constant pool pointer
+     * @param cpi constant pool index
+     * @param info an array in which the details of the field are returned
+     * @return true if the field is resolved
+     */
+    long resolveField(long metaspaceConstantPool, int cpi, byte opcode, long[] info);
+
+    void loadReferencedTypeInPool(long metaspaceConstantPool, int cpi, byte opcode);
+
+    Object lookupAppendixInPool(long metaspaceConstantPool, int cpi);
 
     public enum CodeInstallResult {
         OK("ok"), DEPENDENCIES_FAILED("dependencies failed"), CACHE_FULL("code cache is full"), CODE_TOO_LARGE("code is too large");

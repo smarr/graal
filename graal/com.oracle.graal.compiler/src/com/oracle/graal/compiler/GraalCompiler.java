@@ -269,9 +269,9 @@ public class GraalCompiler {
             throw Debug.handle(e);
         }
 
-        try (Scope s = Debug.scope("Allocator")) {
+        try (Scope s = Debug.scope("Allocator", lirGen)) {
             if (backend.shouldAllocateRegisters()) {
-                new LinearScan(target, lir, lirGen, frameMap).allocate();
+                new LinearScan(target, lir, frameMap).allocate();
             }
         } catch (Throwable e) {
             throw Debug.handle(e);
@@ -295,7 +295,7 @@ public class GraalCompiler {
     public static void emitCode(Backend backend, long[] leafGraphIds, Assumptions assumptions, LIRGenerator lirGen, CompilationResult compilationResult, ResolvedJavaMethod installedCodeOwner,
                     CompilationResultBuilderFactory factory) {
         CompilationResultBuilder crb = backend.newCompilationResultBuilder(lirGen, compilationResult, factory);
-        backend.emitCode(crb, lirGen, installedCodeOwner);
+        backend.emitCode(crb, lirGen.lir, installedCodeOwner);
         crb.finish();
         if (!assumptions.isEmpty()) {
             compilationResult.setAssumptions(assumptions);

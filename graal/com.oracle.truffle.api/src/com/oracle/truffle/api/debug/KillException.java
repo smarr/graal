@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,49 +22,15 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.truffle.api.impl;
+package com.oracle.truffle.api.debug;
 
-import com.oracle.truffle.api.*;
-import com.oracle.truffle.api.frame.*;
 import com.oracle.truffle.api.nodes.*;
 
-public class DefaultCallNode extends CallNode {
+// TODO (mlvdv) does this need to extend ControlFlowException?  It was originally part of the Ruby Shell.
+/**
+ * Controls breaking out of an execution context, such as a shell or eval.
+ */
+public final class KillException extends ControlFlowException {
 
-    public DefaultCallNode(CallTarget target) {
-        super(target);
-    }
-
-    @Override
-    public Object call(PackedFrame caller, Arguments arguments) {
-        return getCallTarget().call(caller, arguments);
-    }
-
-    @Override
-    public void inline() {
-    }
-
-    @Override
-    public CallTarget getSplitCallTarget() {
-        return null;
-    }
-
-    @Override
-    public boolean split() {
-        return false;
-    }
-
-    @Override
-    public boolean isSplittable() {
-        return false;
-    }
-
-    @Override
-    public boolean isInlined() {
-        return false;
-    }
-
-    @Override
-    public String toString() {
-        return getParent() != null ? getParent().toString() : super.toString();
-    }
+    private static final long serialVersionUID = 3163641880088766957L;
 }

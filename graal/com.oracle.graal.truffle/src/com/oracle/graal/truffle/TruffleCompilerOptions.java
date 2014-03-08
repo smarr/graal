@@ -66,7 +66,7 @@ public class TruffleCompilerOptions {
     @Option(help = "Enable call target splitting")
     public static final OptionValue<Boolean> TruffleSplittingEnabled = new OptionValue<>(true);
     @Option(help = "Disable call target splitting if tree size exceeds this limit")
-    public static final OptionValue<Integer> TruffleSplittingMaxCalleeSize = new OptionValue<>(50);
+    public static final OptionValue<Integer> TruffleSplittingMaxCalleeSize = new OptionValue<>(100);
     @Option(help = "Number of most recently used methods in truffle cache")
     public static final OptionValue<Integer> TruffleMaxCompilationCacheSize = new OptionValue<>(512);
     @Option(help = "Enable asynchronous truffle compilation in background thread")
@@ -85,6 +85,8 @@ public class TruffleCompilerOptions {
     public static final OptionValue<Boolean> TraceTruffleCompilationDetails = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleCompilationHistogram = new OptionValue<>(false);
+    @Option(help = "Prints out all polymorphic and generic nodes after compilation.")
+    public static final OptionValue<Boolean> TraceTruffleCompilationPolymorphism = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleExpansion = new OptionValue<>(false);
     @Option(help = "")
@@ -101,6 +103,8 @@ public class TruffleCompilerOptions {
     public static final OptionValue<Boolean> TraceTruffleInliningTree = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TraceTruffleInliningDetails = new OptionValue<>(false);
+    @Option(help = "")
+    public static final OptionValue<Boolean> TraceTruffleSplitting = new OptionValue<>(false);
     @Option(help = "")
     public static final OptionValue<Boolean> TruffleCallTargetProfiling = new StableOptionValue<>(false);
     // @formatter:on

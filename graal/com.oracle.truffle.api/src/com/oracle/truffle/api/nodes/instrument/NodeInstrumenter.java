@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,27 +22,25 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.truffle.api;
-
-import java.io.*;
+package com.oracle.truffle.api.nodes.instrument;
 
 import com.oracle.truffle.api.nodes.*;
 
 /**
- * Language-agnostic access to AST-based debugging support.
- * <p>
- * <strong>WARNING:</strong> this interface is under development and will change substantially.
+ * Implements the instrumentation of a Truffle AST node and returning either:
+ * <ul>
+ * <li>the node itself, or</li>
+ * <li>a newly created {@linkplain InstrumentationProxyNode proxy node} that holds the instrumented
+ * node as its {@linkplain com.oracle.truffle.api.nodes.Node.Child child}.</li>
+ * </ul>
  */
-public interface ASTPrinter {
+public interface NodeInstrumenter {
 
     /**
-     * Print a textual AST display, one line per node, with nesting.
-     * 
-     * @param p
-     * @param node the root node of the display.
-     * @param maxDepth the maximum number of levels to print below the root
-     * @param markNode a node to mark with a textual arrow prefix, if present.
+     * Wraps a {@linkplain InstrumentationProxyNode proxy node} around a node (if not already
+     * wrapped), marks the location with a {@linkplain NodePhylum phylum (category)} for user
+     * interaction, and passes along any characteristics of the particular node that are important
+     * for instrumentation (e.g. the function/method name at a call).
      */
-    void printTree(PrintWriter p, Node node, int maxDepth, Node markNode);
-
+    Node instrumentAs(Node node, NodePhylum phylum, Object... args);
 }

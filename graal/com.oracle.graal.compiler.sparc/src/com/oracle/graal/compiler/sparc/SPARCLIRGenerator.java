@@ -52,10 +52,7 @@ import com.oracle.graal.lir.sparc.SPARCControlFlow.FloatCondMoveOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.ReturnOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.StrategySwitchOp;
 import com.oracle.graal.lir.sparc.SPARCControlFlow.TableSwitchOp;
-import com.oracle.graal.lir.sparc.SPARCMove.LoadAddressOp;
 import com.oracle.graal.lir.sparc.SPARCMove.MembarOp;
-import com.oracle.graal.lir.sparc.SPARCMove.MoveFromRegOp;
-import com.oracle.graal.lir.sparc.SPARCMove.MoveToRegOp;
 import com.oracle.graal.lir.sparc.SPARCMove.NullCheckOp;
 import com.oracle.graal.lir.sparc.SPARCMove.StackLoadAddressOp;
 import com.oracle.graal.nodes.*;
@@ -70,17 +67,8 @@ import com.oracle.graal.phases.util.*;
  */
 public abstract class SPARCLIRGenerator extends LIRGenerator {
 
-    private class SPARCSpillMoveFactory implements LIR.SpillMoveFactory {
-
-        @Override
-        public LIRInstruction createMove(AllocatableValue result, Value input) {
-            return SPARCLIRGenerator.this.createMove(result, input);
-        }
-    }
-
     public SPARCLIRGenerator(StructuredGraph graph, Providers providers, FrameMap frameMap, CallingConvention cc, LIR lir) {
         super(graph, providers, frameMap, cc, lir);
-        lir.spillMoveFactory = new SPARCSpillMoveFactory();
     }
 
     @Override
@@ -116,19 +104,9 @@ public abstract class SPARCLIRGenerator extends LIRGenerator {
         return result;
     }
 
-    protected SPARCLIRInstruction createMove(AllocatableValue dst, Value src) {
-        if (src instanceof SPARCAddressValue) {
-            return new LoadAddressOp(dst, (SPARCAddressValue) src);
-        } else if (isRegister(src) || isStackSlot(dst)) {
-            return new MoveFromRegOp(dst, src);
-        } else {
-            return new MoveToRegOp(dst, src);
-        }
-    }
-
     @Override
     public void emitMove(AllocatableValue dst, Value src) {
-        append(createMove(dst, src));
+        append(SPARCMove.createMove(dst, src));
     }
 
     @Override

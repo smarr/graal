@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,49 +22,51 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.oracle.truffle.api.impl;
+package com.oracle.truffle.api.debug;
 
 import com.oracle.truffle.api.*;
 import com.oracle.truffle.api.frame.*;
 import com.oracle.truffle.api.nodes.*;
+import com.oracle.truffle.api.nodes.instrument.*;
 
-public class DefaultCallNode extends CallNode {
+/**
+ * Access to the suite of facilities available when debugging is enabled.
+ */
+public interface DebugContext {
 
-    public DefaultCallNode(CallTarget target) {
-        super(target);
-    }
+    /**
+     * Access to the Truffle execution context being debugged.
+     */
+    ExecutionContext getContext();
 
-    @Override
-    public Object call(PackedFrame caller, Arguments arguments) {
-        return getCallTarget().call(caller, arguments);
-    }
+    /**
+     * Access to the appropriate implementation of AST node instrumentation.
+     */
+    NodeInstrumenter getNodeInstrumenter();
 
-    @Override
-    public void inline() {
-    }
+    /**
+     * Access to the management of breakpoints, notifications, etc.
+     */
+    DebugManager getDebugManager();
 
-    @Override
-    public CallTarget getSplitCallTarget() {
-        return null;
-    }
+    /**
+     * Gets a printer for Truffle ASTs helpful for debugging guest language implementations.
+     */
+    ASTPrinter getASTPrinter();
 
-    @Override
-    public boolean split() {
-        return false;
-    }
+    /**
+     * Converts a value in the guest language to a display string.
+     */
+    String displayValue(Object value);
 
-    @Override
-    public boolean isSplittable() {
-        return false;
-    }
+    /**
+     * Converts a slot identifier in the guest language to a display string.
+     */
+    String displayIdentifier(FrameSlot slot);
 
-    @Override
-    public boolean isInlined() {
-        return false;
-    }
+    /**
+     * Invokes appropriate debugging action when Truffle execution halts.
+     */
+    void executionHalted(Node node, VirtualFrame frame);
 
-    @Override
-    public String toString() {
-        return getParent() != null ? getParent().toString() : super.toString();
-    }
 }

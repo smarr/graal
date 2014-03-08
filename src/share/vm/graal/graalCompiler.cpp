@@ -211,54 +211,6 @@ void GraalCompiler::print_timers() {
   TRACE_graal_1("GraalCompiler::print_timers");
 }
 
-Handle GraalCompiler::get_JavaTypeFromSignature(Symbol* signature, KlassHandle loading_klass, TRAPS) {
-  BasicType field_type = FieldType::basic_type(signature);
-  // If the field is a pointer type, get the klass of the
-  // field.
-  if (field_type == T_OBJECT || field_type == T_ARRAY) {
-    KlassHandle klass = GraalEnv::get_klass_by_name(loading_klass, signature, false);
-    if (klass.is_null()) {
-      Handle signature_string = java_lang_String::create_from_symbol(signature, CHECK_NH);
-      return VMToCompiler::createUnresolvedJavaType(signature_string, CHECK_NH);
-    } else {
-      return VMToCompiler::createResolvedJavaType(klass->java_mirror(), CHECK_NH);
-    }
-  } else {
-    return VMToCompiler::createPrimitiveJavaType(field_type, CHECK_NH);
-  }
-}
-
-Handle GraalCompiler::get_JavaType(constantPoolHandle cp, int index, KlassHandle loading_klass, TRAPS) {
-  bool is_accessible = false;
-
-  KlassHandle klass = GraalEnv::get_klass_by_index(cp, index, is_accessible, loading_klass);
-  oop catch_class = NULL;
-  if (klass.is_null()) {
-    Symbol* klass_name = NULL;
-    {
-      // We have to lock the cpool to keep the oop from being resolved
-      // while we are accessing it. But we must release the lock before
-      // calling up into Java.
-      MonitorLockerEx ml(cp->lock());
-      constantTag tag = cp->tag_at(index);
-      if (tag.is_klass()) {
-        // The klass has been inserted into the constant pool
-        // very recently.
-        return VMToCompiler::createResolvedJavaType(cp->resolved_klass_at(index)->java_mirror(), CHECK_NH);
-      } else if (tag.is_symbol()) {
-        klass_name = cp->symbol_at(index);
-      } else {
-        assert(cp->tag_at(index).is_unresolved_klass(), "wrong tag");
-        klass_name = cp->unresolved_klass_at(index);
-      }
-    }
-    Handle klass_name_string = java_lang_String::create_from_symbol(klass_name, CHECK_NH);
-    return VMToCompiler::createUnresolvedJavaType(klass_name_string, CHECK_NH);
-  } else {
-    return VMToCompiler::createResolvedJavaType(klass->java_mirror(), CHECK_NH);
-  }
-}
-
 BasicType GraalCompiler::kindToBasicType(jchar ch) {
   switch(ch) {
     case 'z': return T_BOOLEAN;

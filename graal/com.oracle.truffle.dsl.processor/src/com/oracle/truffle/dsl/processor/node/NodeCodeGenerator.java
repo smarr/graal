@@ -796,6 +796,7 @@ public class NodeCodeGenerator extends CompilationUnitFactory<NodeData> {
 
             for (NodeData child : children) {
                 builder.startGroup();
+                builder.cast(Utils.getSimpleName(baseType));
                 NodeData childNode = child;
                 List<NodeData> factories = new ArrayList<>();
                 while (childNode.getDeclaringNode() != null) {

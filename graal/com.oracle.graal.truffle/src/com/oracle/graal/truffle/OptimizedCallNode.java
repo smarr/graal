@@ -22,13 +22,14 @@
  */
 package com.oracle.graal.truffle;
 
+import java.util.*;
 import java.util.concurrent.atomic.*;
 
 import com.oracle.truffle.api.*;
 import com.oracle.truffle.api.frame.*;
 import com.oracle.truffle.api.impl.*;
 import com.oracle.truffle.api.nodes.*;
-import com.oracle.truffle.api.nodes.NodeInfo.Kind;
+import com.oracle.truffle.api.nodes.NodeUtil.NodeCountFilter;
 
 /**
  * Call target that is optimized by Graal upon surpassing a specific invocation threshold.
@@ -60,7 +61,7 @@ abstract class OptimizedCallNode extends DefaultCallNode {
     }
 
     @SuppressWarnings("unused")
-    public void nodeReplaced(Node oldNode, Node newNode, String reason) {
+    public void nodeReplaced(Node oldNode, Node newNode, CharSequence reason) {
     }
 
     @Override
@@ -83,6 +84,11 @@ abstract class OptimizedCallNode extends DefaultCallNode {
 
     public static OptimizedCallNode create(OptimizedCallTarget target) {
         return new DefaultOptimizedCallNode(target);
+    }
+
+    @Override
+    public boolean isInlinable() {
+        return true;
     }
 
     private static final class DefaultOptimizedCallNode extends OptimizedCallNode {
@@ -131,20 +137,25 @@ abstract class OptimizedCallNode extends DefaultCallNode {
             // return false;
             // }
 
+            // disable recursive splitting for now
+            OptimizedCallTarget splitTarget = getCallTarget();
+            List<OptimizedCallTarget> compilationRoots = OptimizedCallNodeProfile.findCompilationRoots(this);
+            for (OptimizedCallTarget compilationRoot : compilationRoots) {
+                if (compilationRoot == splitTarget || compilationRoot.getSplitSource() == splitTarget) {
+                    // recursive call found
+                    return false;
+                }
+            }
+
             // max one child call and callCount > 2 and kind of small number of nodes
             if (isMaxSingleCall()) {
                 return true;
             }
-            return countPolymorphic() >= 1 || countGeneric() > 0;
+            return countPolymorphic() >= 1;
         }
 
         @Override
-        public void nodeReplaced(Node oldNode, Node newNode, String reason) {
-            trySplit = true;
-        }
-
-        @Override
-        protected void notifyCallNodeAdded() {
+        public void nodeReplaced(Node oldNode, Node newNode, CharSequence reason) {
             trySplit = true;
         }
 
@@ -163,11 +174,13 @@ abstract class OptimizedCallNode extends DefaultCallNode {
         }
 
         private int countPolymorphic() {
-            return NodeUtil.countNodes(getCallTarget().getRootNode(), null, Kind.POLYMORPHIC, false);
-        }
-
-        private int countGeneric() {
-            return NodeUtil.countNodes(getCallTarget().getRootNode(), null, Kind.GENERIC, false);
+            return NodeUtil.countNodes(getCallTarget().getRootNode(), new NodeCountFilter() {
+                public boolean isCounted(Node node) {
+                    NodeCost cost = node.getCost();
+                    boolean polymorphic = cost == NodeCost.POLYMORPHIC || cost == NodeCost.MEGAMORPHIC;
+                    return polymorphic;
+                }
+            });
         }
 
         @Override

@@ -278,7 +278,7 @@ public final class HotSpotResolvedObjectType extends HotSpotResolvedJavaType {
     @Override
     public boolean hasFinalizableSubclass() {
         assert !isArray();
-        return runtime().getCompilerToVM().hasFinalizableSubclass(this);
+        return runtime().getCompilerToVM().hasFinalizableSubclass(metaspaceKlass());
     }
 
     @Override
@@ -363,7 +363,11 @@ public final class HotSpotResolvedObjectType extends HotSpotResolvedJavaType {
     @Override
     public ResolvedJavaMethod resolveMethod(ResolvedJavaMethod method) {
         assert method instanceof HotSpotMethod;
-        final long resolvedMetaspaceMethod = runtime().getCompilerToVM().resolveMethod(this, method.getName(), ((HotSpotSignature) method.getSignature()).getMethodDescriptor());
+        if (!isAbstract(method.getModifiers()) && method.getDeclaringClass().equals(this)) {
+            return method;
+        }
+
+        final long resolvedMetaspaceMethod = runtime().getCompilerToVM().resolveMethod(metaspaceKlass(), method.getName(), ((HotSpotSignature) method.getSignature()).getMethodDescriptor());
         if (resolvedMetaspaceMethod == 0) {
             return null;
         }
@@ -593,7 +597,7 @@ public final class HotSpotResolvedObjectType extends HotSpotResolvedJavaType {
         }
         if (!includeSuperclasses) {
             int myFieldsStart = 0;
-            while (myFieldsStart < instanceFields.length && instanceFields[myFieldsStart].getDeclaringClass() != this) {
+            while (myFieldsStart < instanceFields.length && !instanceFields[myFieldsStart].getDeclaringClass().equals(this)) {
                 myFieldsStart++;
             }
             if (myFieldsStart == 0) {
@@ -736,7 +740,7 @@ public final class HotSpotResolvedObjectType extends HotSpotResolvedJavaType {
     }
 
     public ResolvedJavaMethod getClassInitializer() {
-        long metaspaceMethod = runtime().getCompilerToVM().getClassInitializer(this);
+        final long metaspaceMethod = runtime().getCompilerToVM().getClassInitializer(metaspaceKlass());
         if (metaspaceMethod != 0L) {
             return createMethod(metaspaceMethod);
         }
@@ -760,20 +764,6 @@ public final class HotSpotResolvedObjectType extends HotSpotResolvedJavaType {
      */
     public void setNodeClass(NodeClass nodeClass) {
         this.nodeClass = nodeClass;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (!(obj instanceof HotSpotResolvedObjectType)) {
-            return false;
-        }
-        HotSpotResolvedObjectType that = (HotSpotResolvedObjectType) obj;
-        return this.mirror() == that.mirror();
-    }
-
-    @Override
-    public int hashCode() {
-        return super.hashCode();
     }
 
     @Override

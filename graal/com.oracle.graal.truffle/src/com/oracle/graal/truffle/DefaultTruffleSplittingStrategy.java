@@ -73,11 +73,6 @@ public class DefaultTruffleSplittingStrategy implements TruffleSplittingStrategy
             // recursive call found
             return false;
         }
-
-        // max one child call and callCount > 2 and kind of small number of nodes
-        if (isMaxSingleCall(call)) {
-            return true;
-        }
         return countPolymorphic(call) >= 1;
     }
 

@@ -650,7 +650,7 @@ public class NodeParser extends AbstractParser<NodeData> {
             SpecializationData next = i + 1 < specializations.size() ? specializations.get(i + 1) : null;
 
             if (!cur.isContainedBy(next)) {
-                next.addError("This specialiation is not a valid exceptional rewrite target for %s. To fix this make %s compatible to %s or remove the exceptional rewrite.",
+                next.addError("This specialization is not a valid exceptional rewrite target for %s. To fix this make %s compatible to %s or remove the exceptional rewrite.",
                                 cur.createReferenceName(), next != null ? next.createReferenceName() : "-", cur.createReferenceName());
                 continue;
             }

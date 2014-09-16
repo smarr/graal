@@ -906,9 +906,9 @@ public class NodeCodeGenerator extends AbstractCompilationUnitFactory<NodeData> 
             CodeExecutableElement method = new CodeExecutableElement(modifiers(PUBLIC), context.getType(void.class), "updateTypes0");
             method.getParameters().add(new CodeVariableElement(classArray, "types"));
 
-            if (getModel().isPolymorphic()) {
-                CodeTreeBuilder builder = method.createBuilder();
+            CodeTreeBuilder builder = method.createBuilder();
 
+            if (getModel().isPolymorphic()) {
                 int index = 0;
                 for (NodeExecutionData execution : getModel().getNode().getChildExecutions()) {
                     String fieldName = polymorphicTypeName(execution);

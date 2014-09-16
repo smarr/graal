@@ -5,7 +5,6 @@ then
   echo Publishing gitrev: $GIT_REV
   ./mx.sh clean
   ./mx.sh --vm server build
-  #./mx.sh trufflejar
   
   mkdir published/$GIT_REV
   rm -Rf published/latest
@@ -13,9 +12,9 @@ then
   
   touch published/latest/git-rev-$GIT_REV
   
-  cp ./truffle.jar truffle-dsl-processor.jar published/$GIT_REV/
-  cp ./truffle.jar truffle-dsl-processor.jar published/latest/
+  cp ./build/*.jar ./build/*.zip published/$GIT_REV/
+  cp ./build/*.jar ./build/*.zip published/latest/
   
   chmod -R a+r published
-  rsync -rvz --del published/* soft:public_html/downloads/truffle/
+  rsync -rvz --del published/* ts:www-truffle/
 fi
